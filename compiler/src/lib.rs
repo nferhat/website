@@ -4,6 +4,9 @@
 //! with proper "templating" (more like just adding some styles, performing syntax highlighting,
 //! etc...)
 
+#[macro_use]
+extern crate tracing;
+
 pub mod frontmatter;
 pub mod generators;
 pub mod page;

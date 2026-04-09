@@ -60,6 +60,7 @@ pub fn get_pages(path: impl AsRef<Path>) -> Result<Vec<SitePage>, Error> {
     let path = path.as_ref();
     let mut res = vec![];
     if !path.is_dir() {
+        debug!(?path, "Skipping path since it's not a directory");
         return Ok(vec![]);
     }
 
@@ -84,6 +85,7 @@ pub fn get_pages(path: impl AsRef<Path>) -> Result<Vec<SitePage>, Error> {
             // Get the frontmatter out.
             let children = contents.children_mut().ok_or(Error::MissingFronmatter)?;
             if children.len() < 1 {
+                warn!(?name, "Skipping file without frontmatter");
                 return Err(Error::MissingFronmatter);
             }
             let frontmatter_node = children.remove(0);
