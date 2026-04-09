@@ -1,0 +1,11 @@
+[package]
+name = "compiler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+markdown = "1.0.0"
+render = "0.3.1"
