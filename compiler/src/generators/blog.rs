@@ -12,7 +12,11 @@ pub fn prelude(
 
     let mut math_script = String::new();
     if include_math_script {
-        math_script = format!(r#"<script defer id="mathjax" src="{MATHJAX_SCRIPT_URL}"></script>"#);
+        math_script = format!(
+            r#"
+            <script> MathJax = {{ options: {{ enableMenu: false }} }}; </script>
+            <script defer id="mathjax" src="{MATHJAX_SCRIPT_URL}"></script>"#
+        );
     }
 
     let title = title.as_ref();
