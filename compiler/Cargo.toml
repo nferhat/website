@@ -8,5 +8,6 @@ serde.workspace = true
 toml.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-markdown = "1.0.0"
+markdown.workspace = true
 render = "0.3.1"
+html-escape = "0.2.13"
