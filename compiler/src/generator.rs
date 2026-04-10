@@ -45,7 +45,7 @@ impl Generator {
         }
     }
 
-    pub fn html(mut self) -> Result<String, Error> {
+    pub fn html(mut self) -> Result<String> {
         // FIX: This is currently only a blog generator
         let SitePage {
             name,
@@ -78,6 +78,7 @@ impl Generator {
             ),
             epilogue = blog::epilogue()
         );
+
         Ok(out)
     }
 
@@ -86,25 +87,21 @@ impl Generator {
         node: mdast::Node,
         position: Position,
         out: &mut impl Write,
-    ) -> fmt::Result {
+    ) -> Result {
         match node {
             mdast::Node::Blockquote(blockquote) => {
-                write!(out, "<blockquote>")?;
-                for child in blockquote.children {
-                    let position = child.position().unwrap().clone();
-                    self.generate_common(child, position, out)?;
-                }
-                write!(out, "</blockquote>")?;
+                self.generate_node_with_children(
+                    "blockquote",
+                    &[],
+                    blockquote.children.into_iter(),
+                    out,
+                )?;
             }
-            // FIX: Footnotes
-            mdast::Node::FootnoteDefinition(footnote_definition) => todo!(),
-            // FIX: Lists
-            mdast::Node::List(list) => todo!(),
+
             mdast::Node::Break(_) => write!(out, "<br>")?,
             mdast::Node::InlineCode(inline_code) => {
-                self.generate_inline_code(inline_code, position, out)?;
+                self.generate_inline_code(inline_code, position, out)?
             }
-            // FIX: Math
             mdast::Node::InlineMath(inline_math) => {
                 self.has_math = true;
                 write!(
@@ -117,46 +114,41 @@ impl Generator {
                 self.has_math = true;
                 write!(out, "<span class=math>\\[{}\\]</span>", math.value)?;
             }
-            mdast::Node::Delete(delete) => todo!(),
+            mdast::Node::Delete(delete) => self.generate_strikethrough(delete, position, out)?,
             mdast::Node::Emphasis(emphasis) => {
-                write!(out, "<em>")?;
-                for child in emphasis.children {
-                    let position = child.position().unwrap().clone();
-                    self.generate_common(child, position, out)?;
-                }
-                write!(out, "</em>")?;
+                self.generate_node_with_children("em", &[], emphasis.children.into_iter(), out)?;
             }
-            mdast::Node::FootnoteReference(footnote_reference) => todo!(),
             mdast::Node::Html(html) => write!(out, "{}", html.value)?,
-            // FIX: images
-            mdast::Node::Image(image) => todo!(),
-            mdast::Node::ImageReference(image_reference) => todo!(),
-            mdast::Node::Link(link) => todo!(),
-            mdast::Node::LinkReference(link_reference) => todo!(),
-            mdast::Node::Strong(strong) => todo!(),
+            mdast::Node::Strong(strong) => {
+                self.generate_node_with_children("strong", &[], strong.children.into_iter(), out)?;
+            }
             mdast::Node::Text(text) => write!(out, "{}", text.value)?,
             mdast::Node::Code(code) => self.generate_codeblock(code, position, out)?,
-            // FIX: Math
-            mdast::Node::MdxFlowExpression(mdx_flow_expression) => todo!(),
             mdast::Node::Heading(heading) => self.generate_heading(heading, position, out)?,
-            // FIX: Tables
-            mdast::Node::Table(table) => todo!(),
-            mdast::Node::TableRow(table_row) => todo!(),
-            mdast::Node::TableCell(table_cell) => todo!(),
             mdast::Node::ThematicBreak(_) => write!(out, "<hr>")?,
-            // FIX: List items
-            mdast::Node::ListItem(list_item) => todo!(),
-            // FIX: Definitions
-            mdast::Node::Definition(definition) => todo!(),
             mdast::Node::Paragraph(paragraph) => {
-                write!(out, "<p>")?;
-                for child in paragraph.children {
-                    let position = child.position().unwrap().clone();
-                    self.generate_common(child, position, out)?;
-                }
-                write!(out, "</p>")?;
+                self.generate_node_with_children("p", &[], paragraph.children.into_iter(), out)?;
             }
-            _ => unreachable!(),
+
+            // FIX: images
+            mdast::Node::Image(_image) => todo!(),
+            mdast::Node::ImageReference(_image_reference) => todo!(),
+            // FIX: Links
+            mdast::Node::Link(_link) => todo!(),
+            mdast::Node::LinkReference(_link_reference) => todo!(),
+            mdast::Node::Definition(_definition) => todo!(),
+            // FIX: Tables
+            mdast::Node::Table(_table) => todo!(),
+            mdast::Node::TableRow(_table_row) => todo!(),
+            mdast::Node::TableCell(_table_cell) => todo!(),
+            // FIX: Footnotes
+            mdast::Node::FootnoteDefinition(_footnote_definition) => todo!(),
+            mdast::Node::FootnoteReference(_footnote_reference) => todo!(),
+            // FIX: Lists
+            mdast::Node::List(_list) => todo!(),
+            mdast::Node::ListItem(_list_item) => todo!(),
+
+            _ => unreachable!("MDX is disabled"),
         }
 
         Ok(())
@@ -167,7 +159,7 @@ impl Generator {
         heading: mdast::Heading,
         position: Position,
         out: &mut impl Write,
-    ) -> fmt::Result {
+    ) -> Result {
         trace!(?position, level = heading.depth, "Got heading");
 
         // NOTE: Here we limit what we can render inside a heading, otherwise other pieces of
@@ -187,9 +179,9 @@ impl Generator {
         inline_code: mdast::InlineCode,
         position: Position,
         out: &mut impl Write,
-    ) -> fmt::Result {
+    ) -> Result {
         trace!(?position, "Got inline code");
-        write!(out, "<code>{}</code>", inline_code.value)?;
+        write!(out, "<code class=inline-code>{}</code>", inline_code.value)?;
         Ok(())
     }
 
@@ -198,12 +190,12 @@ impl Generator {
         delete: mdast::Delete,
         position: Position,
         out: &mut impl Write,
-    ) -> fmt::Result {
+    ) -> Result {
         trace!(?position, "Got delete/strikethrough");
         write!(out, "<del>")?;
         for child in delete.children {
             let position = child.position().unwrap().clone();
-            self.generate_common(child, position, out);
+            self.generate_common(child, position, out)?;
         }
         write!(out, "</del>")?;
         Ok(())
@@ -214,12 +206,42 @@ impl Generator {
         code: mdast::Code,
         position: Position,
         out: &mut impl Write,
-    ) -> fmt::Result {
+    ) -> Result {
         let res = codeblock::generate(position, &code)?;
         write!(out, "{res}")?;
         Ok(())
     }
+
+    fn generate_node_with_children(
+        &mut self,
+        tag_name: &str,
+        classes: &[&str],
+        children: impl IntoIterator<Item = mdast::Node>,
+        out: &mut impl Write,
+    ) -> Result {
+        write!(out, "<{tag_name} ")?;
+        if classes.len() != 0 {
+            write!(out, "class=\"")?;
+            for class in classes {
+                write!(out, "{class} ")?;
+            }
+            write!(out, "\"")?;
+        }
+        write!(out, ">")?;
+
+        for child in children {
+            let position = child.position().cloned().unwrap();
+            self.generate_common(child, position, out)?;
+        }
+
+        write!(out, "</{tag_name}>")?;
+
+        Ok(())
+    }
 }
+
+/// A result type that can be generated by the [`Generator`]
+type Result<T = ()> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum Error {
