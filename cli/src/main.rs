@@ -1,4 +1,4 @@
-use compiler::generators;
+use compiler::{generator::Generator, generators};
 
 #[macro_use]
 extern crate tracing;
@@ -18,8 +18,8 @@ fn main() {
 
     for page in pages {
         info!(source = ?page.path, "Generating page");
-        let str = generators::blog::generate(&page.frontmatter, &page.contents).unwrap();
-        println!("{str}");
+        let generator = Generator::new(page);
+        println!("{}", generator.html().unwrap());
     }
 }
 

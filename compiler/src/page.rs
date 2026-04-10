@@ -64,9 +64,9 @@ pub fn get_pages(path: impl AsRef<Path>) -> Result<Vec<SitePage>, Error> {
         return Ok(vec![]);
     }
 
-    let iter = fs::read_dir(path).map_err(Error::Io)?;
+    let iter = fs::read_dir(path)?;
     for entry in iter {
-        let entry = entry.map_err(Error::Io)?;
+        let entry = entry?;
         // FIXME: This should not crash, right?
         let name = entry.file_name().into_string().unwrap();
         let path = entry.path();
@@ -78,7 +78,7 @@ pub fn get_pages(path: impl AsRef<Path>) -> Result<Vec<SitePage>, Error> {
                 .read(true)
                 .open(&path)
                 .map_err(Error::Io)?;
-            let raw_content = io::read_to_string(file).map_err(Error::Io)?;
+            let raw_content = io::read_to_string(file)?;
             let mut contents =
                 markdown::to_mdast(&raw_content, &parse_options()).map_err(Error::Markdown)?;
 
@@ -96,8 +96,7 @@ pub fn get_pages(path: impl AsRef<Path>) -> Result<Vec<SitePage>, Error> {
             else {
                 return Err(Error::MissingFronmatter);
             };
-            let frontmatter =
-                frontmatter::from_str(&frontmatter_str).map_err(Error::InvalidFrontmatter)?;
+            let frontmatter = frontmatter::from_str(&frontmatter_str)?;
 
             res.push(SitePage {
                 name,
@@ -117,9 +116,9 @@ pub enum Error {
     #[error("Missing frontmatter")]
     MissingFronmatter,
     #[error("Invalid frontmatter data: {0}")]
-    InvalidFrontmatter(toml::de::Error),
+    InvalidFrontmatter(#[from] toml::de::Error),
     #[error("I/O error: {0}")]
-    Io(io::Error),
+    Io(#[from] io::Error),
     #[error("Error parsing markdown: {0}")]
     Markdown(markdown::message::Message),
 }

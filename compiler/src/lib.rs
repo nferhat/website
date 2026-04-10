@@ -8,5 +8,6 @@
 extern crate tracing;
 
 pub mod frontmatter;
+pub mod generator;
 pub mod generators;
 pub mod page;
