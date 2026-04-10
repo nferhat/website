@@ -8,6 +8,10 @@
 extern crate tracing;
 
 pub mod frontmatter;
-pub mod generator;
+mod generator;
 pub mod generators;
 pub mod page;
+mod style;
+
+pub use generator::Generator;
+pub use style::compile_to_stylesheet;

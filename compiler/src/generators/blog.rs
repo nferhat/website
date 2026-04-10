@@ -1,4 +1,9 @@
-pub fn prelude(title: impl AsRef<str>) -> String {
+pub fn prelude(title: impl AsRef<str>, stylesheet_path: Option<&str>) -> String {
+    let mut stylesheet_include = String::new();
+    if let Some(path) = stylesheet_path {
+        stylesheet_include = format!(r#"<link rel="stylesheet" href="{path}" />"#);
+    }
+
     let title = title.as_ref();
     format!(
         r#"<!doctype html>
@@ -7,37 +12,7 @@ pub fn prelude(title: impl AsRef<str>) -> String {
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>{title}</title>
-        <!-- FIXME: Styling using compiled SASS -->
-        <style>
-            :root {{
-                background-color: #141417;
-                color: #cecece;
-            }}
-
-            .codeblock {{
-                position: relative;
-            }}
-            .language-name {{
-                font-family: monospace;
-                position: absolute;
-                padding: 6px;
-                background-color: #cecece09;
-                border-radius: 4px;
-                right: 0;
-                margin: 8px;
-            }}
-
-            pre {{
-                padding: 12px;
-                background-color: #101012;
-                border-radius: 10px;
-            }}
-
-            .content {{
-                margin-left: 30vw;
-                margin-right: 10vw;
-            }}
-        </style>
+        {stylesheet_include}
     </head>
 
     <body><div class="content">

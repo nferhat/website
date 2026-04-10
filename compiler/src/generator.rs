@@ -24,11 +24,19 @@ use crate::{
 
 pub struct Generator {
     page: SitePage,
+    stylesheet_path: Option<String>,
 }
 
 impl Generator {
-    pub fn new(page: SitePage) -> Self {
-        Self { page }
+    /// Creates a new generator for a given [`SitePage`].
+    ///
+    /// The `stylesheet` parameter will be the URL/path from where the page will load it's stylesheet.
+    /// Essentially, it's the `href` parameter of a `<link rel="stylesheet"> tag.
+    pub fn new(page: SitePage, stylesheet: Option<impl Into<String>>) -> Self {
+        Self {
+            page,
+            stylesheet_path: stylesheet.map(Into::into),
+        }
     }
 
     pub fn html(mut self) -> Result<String, Error> {
@@ -49,7 +57,11 @@ impl Generator {
         };
 
         let out = &mut buffer;
-        writeln!(out, "{}", blog::prelude(&frontmatter.title))?;
+        let prelude = blog::prelude(
+            &frontmatter.title,
+            self.stylesheet_path.as_ref().map(String::as_str),
+        );
+        writeln!(out, "{}", prelude)?;
 
         for child in root.children.drain(..) {
             let position = child.position().unwrap().clone();
