@@ -48,6 +48,7 @@ fn parse_options() -> markdown::ParseOptions {
             math_flow: true,
             block_quote: true,
             frontmatter: true,
+            math_text: true,
             ..markdown::Constructs::gfm()
         },
         ..Default::default()

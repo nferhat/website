@@ -25,6 +25,11 @@ use crate::{
 pub struct Generator {
     page: SitePage,
     stylesheet_path: Option<String>,
+    /// Whether this sitepage has math.
+    ///
+    /// If `true`, we need to include a special math script from [MathJax](https://mathjax.org)
+    /// in order to properly handle/render math.
+    has_math: bool,
 }
 
 impl Generator {
@@ -36,12 +41,12 @@ impl Generator {
         Self {
             page,
             stylesheet_path: stylesheet.map(Into::into),
+            has_math: false,
         }
     }
 
     pub fn html(mut self) -> Result<String, Error> {
         // FIX: This is currently only a blog generator
-        let mut buffer = String::new();
         let SitePage {
             name,
             path,
@@ -56,21 +61,24 @@ impl Generator {
             unreachable!()
         };
 
-        let out = &mut buffer;
-        let prelude = blog::prelude(
-            &frontmatter.title,
-            self.stylesheet_path.as_ref().map(String::as_str),
-        );
-        writeln!(out, "{}", prelude)?;
-
+        // We first need to generate the HTML for the children since we need to determine whether
+        // the content has math in order to only include mathjax when needed.
+        let mut body = String::new();
         for child in root.children.drain(..) {
             let position = child.position().unwrap().clone();
-            self.generate_common(child, position, out)?;
+            self.generate_common(child, position, &mut body)?;
         }
 
-        writeln!(out, "{}", blog::epilogue())?;
-
-        Ok(buffer)
+        let out = format!(
+            "{prelude}{body}{epilogue}",
+            prelude = blog::prelude(
+                &frontmatter.title,
+                self.stylesheet_path.as_ref().map(String::as_str),
+                self.has_math,
+            ),
+            epilogue = blog::epilogue()
+        );
+        Ok(out)
     }
 
     fn generate_common(
@@ -97,7 +105,18 @@ impl Generator {
                 self.generate_inline_code(inline_code, position, out)?;
             }
             // FIX: Math
-            mdast::Node::InlineMath(inline_math) => todo!(),
+            mdast::Node::InlineMath(inline_math) => {
+                self.has_math = true;
+                write!(
+                    out,
+                    "<span class=\"math-inline\">\\({}\\)</p>",
+                    inline_math.value
+                )?;
+            }
+            mdast::Node::Math(math) => {
+                self.has_math = true;
+                write!(out, "<span class=math>\\[{}\\]</span>", math.value)?;
+            }
             mdast::Node::Delete(delete) => todo!(),
             mdast::Node::Emphasis(emphasis) => {
                 write!(out, "<em>")?;
@@ -108,7 +127,7 @@ impl Generator {
                 write!(out, "</em>")?;
             }
             mdast::Node::FootnoteReference(footnote_reference) => todo!(),
-            mdast::Node::Html(html) => todo!(),
+            mdast::Node::Html(html) => write!(out, "{}", html.value)?,
             // FIX: images
             mdast::Node::Image(image) => todo!(),
             mdast::Node::ImageReference(image_reference) => todo!(),
@@ -118,7 +137,6 @@ impl Generator {
             mdast::Node::Text(text) => write!(out, "{}", text.value)?,
             mdast::Node::Code(code) => self.generate_codeblock(code, position, out)?,
             // FIX: Math
-            mdast::Node::Math(math) => todo!(),
             mdast::Node::MdxFlowExpression(mdx_flow_expression) => todo!(),
             mdast::Node::Heading(heading) => self.generate_heading(heading, position, out)?,
             // FIX: Tables
