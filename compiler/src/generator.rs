@@ -124,7 +124,16 @@ impl Generator {
         writeln!(&mut body, "<hr>")?;
         let footnotes = self.footnotes.clone();
         for (name, Footnote { contents }) in footnotes {
-            write!(&mut body, r#"<p id="footnote-{id}">"#, id = name)?;
+            write!(
+                &mut body,
+                r#"<span class=footnote id="footnote-{id}">"#,
+                id = name
+            )?;
+            write!(
+                &mut body,
+                r#"<span class=footnote-id>({id})</span>"#,
+                id = name
+            )?;
             for child in contents {
                 let position = child.position().unwrap().clone();
                 self.generate_common(child, position, &mut body)?;
@@ -133,9 +142,10 @@ impl Generator {
             // But footnotes should be unique, no?
             writeln!(
                 &mut body,
-                r##"<a href="#footnote-back-{id}">&#8617</a></p>"##,
+                r##"<a class=footnote-back href="#footnote-back-{id}">&#8617</a>"##,
                 id = name
             )?;
+            write!(&mut body, "</span>")?;
         }
 
         blog::page(
@@ -210,11 +220,11 @@ impl Generator {
             }
             mdast::Node::FootnoteReference(fref) => {
                 let mdast::FootnoteReference { identifier, .. } = fref;
-                // This trick is from // <https://stackoverflow.com/questions/66964/how-do-i-create-a-link-to-a-footnote-in-html>
+                // This trick is from <https://stackoverflow.com/questions/66964/how-do-i-create-a-link-to-a-footnote-in-html>
                 // We create a set of anchors, one to go down to the footnote, and one to go back.
                 write!(
                     out,
-                    r##"<a class="footnote-ref" id="footnote-back-{identifier}" href="#footnote-{identifier}"> <sup>{identifier}</sup> </a>"##
+                    r##"<a class="footnote-ref" id="footnote-back-{identifier}" href="#footnote-{identifier}"><sup>{identifier}</sup></a>"##
                 )?;
             }
 
