@@ -42,6 +42,13 @@ pub struct Generator {
     link_defs: HashMap<String, String>,
     /// Unhandled link definitions that were used.
     invalid_links: HashSet<String>,
+    /// Footnote definitions.
+    footnotes: HashMap<String, Footnote>,
+}
+
+#[derive(Clone)]
+struct Footnote {
+    contents: Vec<mdast::Node>,
 }
 
 impl Generator {
@@ -56,6 +63,7 @@ impl Generator {
             has_math: false,
             link_defs: HashMap::new(),
             invalid_links: HashSet::new(),
+            footnotes: HashMap::new(),
         }
     }
 
@@ -75,37 +83,60 @@ impl Generator {
             unreachable!()
         };
 
-        // NOTE: Here I assume links to be the "definitions" to be link definitions.
-        //
-        // This would allow you todo the following:
-        // ```
-        // [This amazing link](thingy)
-        // [thingy]: https://github.com/whatever
-        // ```
-        //
-        // In order todo this, we need to run a pre-pass to finish the link definitions. This can be made
-        // as flexible as needed in the future (if we want to actually use dictionary definitions, which I
-        // don't think I'm gonna use for blogging)
-        for child in &root.children {
-            let mdast::Node::Definition(definition) = child else {
-                continue;
-            };
-
-            let id = &definition.identifier;
-            let new = &definition.url;
-            let prev = self.link_defs.insert(id.clone(), new.clone());
-            if let Some(prev) = prev {
-                // I don't think this should be intended, but still warn the user in case
-                warn!(%id, %prev, %new, "link re-defined");
+        info!("running pre-pass");
+        let mut remaining_children = Vec::with_capacity(root.children.len());
+        for child in root.children.drain(..) {
+            match child {
+                mdast::Node::Definition(definition) => {
+                    let id = definition.identifier;
+                    let new = definition.url;
+                    let prev = self.link_defs.insert(id.clone(), new.clone());
+                    if let Some(prev) = prev {
+                        // I don't think this should be intended, but still warn the user in case
+                        warn!(%id, %prev, %new, "link re-defined");
+                    }
+                }
+                mdast::Node::FootnoteDefinition(footnote_def) => {
+                    let id = &footnote_def.identifier;
+                    let contents = footnote_def.children;
+                    let prev = self.footnotes.insert(id.clone(), Footnote { contents });
+                    if let Some(_) = prev {
+                        // I don't think this should be intended, but still warn the user in case
+                        warn!(%id, "footnote re-defined");
+                    }
+                }
+                x => remaining_children.push(x),
             }
         }
+        info!(
+            footnotes = self.footnotes.len(),
+            link_definitions = self.link_defs.len(),
+            "pre-pass results",
+        );
 
         // We first need to generate the HTML for the children since we need to determine whether
         // the content has math in order to only include mathjax when needed.
         let mut body = String::new();
-        for child in root.children.drain(..) {
+        for child in remaining_children.drain(..) {
             let position = child.position().unwrap().clone();
             self.generate_common(child, position, &mut body)?;
+        }
+        // Generate footnotes at the end.
+        writeln!(&mut body, "<hr>")?;
+        let footnotes = self.footnotes.clone();
+        for (name, Footnote { contents }) in footnotes {
+            write!(&mut body, r#"<p id="footnote-{id}">"#, id = name)?;
+            for child in contents {
+                let position = child.position().unwrap().clone();
+                self.generate_common(child, position, &mut body)?;
+            }
+            // FIX: This system always gets you back to the first occurence of this footnote
+            // But footnotes should be unique, no?
+            writeln!(
+                &mut body,
+                r##"<a href="#footnote-back-{id}">&#8617</a></p>"##,
+                id = name
+            )?;
         }
 
         let out = format!(
@@ -170,12 +201,27 @@ impl Generator {
                 write!(out, "<span class=math>\\[{}\\]</span>", math.value)?;
             }
 
-            mdast::Node::Definition(_definition) => (), // definitions are handled in a pre-pass
+            mdast::Node::Definition(_definition) => {
+                unreachable!("link definitions are handled in the pre-pass")
+            }
             mdast::Node::Link(link) => {
                 self.generate_link(link, position, out)?;
             }
             mdast::Node::LinkReference(_link_reference) => {
                 unimplemented!("link references are not implemented, just use basic links!")
+            }
+
+            mdast::Node::FootnoteDefinition(_footnote_definition) => {
+                unreachable!("footnote definitions are handled in the pre-pass")
+            }
+            mdast::Node::FootnoteReference(fref) => {
+                let mdast::FootnoteReference { identifier, .. } = fref;
+                // This trick is from // <https://stackoverflow.com/questions/66964/how-do-i-create-a-link-to-a-footnote-in-html>
+                // We create a set of anchors, one to go down to the footnote, and one to go back.
+                write!(
+                    out,
+                    r##"<a class="footnote-ref" id="footnote-back-{identifier}" href="#footnote-{identifier}"> <sup>{identifier}</sup> </a>"##
+                )?;
             }
 
             // FIX: images
