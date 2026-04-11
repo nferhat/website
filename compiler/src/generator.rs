@@ -148,14 +148,6 @@ impl Generator {
                 )?;
                 write!(&mut body, "</span>")?;
             }
-            // FIX: This system always gets you back to the first occurence of this footnote
-            // But footnotes should be unique, no?
-            writeln!(
-                &mut body,
-                r##"<a class=footnote-back href="#footnote-back-{id}">&#8617</a>"##,
-                id = name
-            )?;
-            write!(&mut body, "</span>")?;
         }
 
         blog::page(
@@ -245,9 +237,6 @@ impl Generator {
                 )?;
             }
 
-            // FIX: images
-            mdast::Node::Image(_image) => todo!(),
-            mdast::Node::ImageReference(_image_reference) => todo!(),
             // FIX: Tables
             mdast::Node::Table(_table) => todo!(),
             mdast::Node::TableRow(_table_row) => todo!(),
@@ -299,14 +288,8 @@ impl Generator {
         position: Position,
         out: &mut impl Write,
     ) -> Result {
-        trace!(?position, "Got delete/strikethrough");
-        write!(out, "<del>")?;
-        for child in delete.children {
-            let position = child.position().unwrap().clone();
-            self.generate_common(child, position, out)?;
-        }
-        write!(out, "</del>")?;
-        Ok(())
+        trace!(?position, "Got strikethrough/delete");
+        self.generate_node_with_children("span", &["strikethrough"], delete.children, out)
     }
 
     fn generate_codeblock(
