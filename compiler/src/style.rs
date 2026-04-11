@@ -4,11 +4,16 @@
 //! markdown content into HTML pages. This allows to easily define anything, and be done quickly
 //! with tweaking the website.
 
+use std::path::Path;
+
 use codemap::SpanLoc;
 use grass::Logger;
 
 /// Compiles the given input CSS into a proper stylesheet
-pub fn compile_to_stylesheet(input: &str) -> Result<String, Box<grass::Error>> {
+pub fn compile_to_stylesheet(
+    input: &str,
+    load_paths: &[impl AsRef<Path>],
+) -> Result<String, Box<grass::Error>> {
     let logger = TracingLogger {
         span: tracing::debug_span!("sass"),
     };
@@ -17,6 +22,7 @@ pub fn compile_to_stylesheet(input: &str) -> Result<String, Box<grass::Error>> {
         .logger(&logger)
         .quiet(false)
         .style(grass::OutputStyle::Compressed)
+        .load_paths(load_paths)
         .input_syntax(grass::InputSyntax::Sass);
 
     grass::from_string(input, &options)

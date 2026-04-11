@@ -67,8 +67,9 @@ fn main() -> anyhow::Result<()> {
 
 fn generate_style(style_input: PathBuf, output_path: impl AsRef<Path>) -> anyhow::Result<()> {
     let output_path = output_path.as_ref();
+    let import_path = style_input.parent().context("missing parent")?;
     let sass_input = fs::read_to_string(&style_input)?;
-    let style_content = compiler::compile_to_stylesheet(&sass_input).unwrap();
+    let style_content = compiler::compile_to_stylesheet(&sass_input, &[import_path])?;
     let style_path = output_path.join("style.css");
     std::fs::write(&style_path, &style_content)?;
     Ok(())
