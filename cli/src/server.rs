@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::http::header::CACHE_CONTROL;
-use axum::response::Sse;
 use axum::response::sse::Event as SseEvent;
+use axum::response::{IntoResponse, Sse};
 use axum::{Router, http};
 use futures::StreamExt;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
@@ -51,11 +51,19 @@ fn serve_build(path: &Path, tx: broadcast::Sender<()>) -> Router {
 
     Router::new()
         // Hot reloading route. We use an SSE event with some additional javascript on the client to
-        // achieve this.
+        // achieve this. We also include the script needed to reload.
         .route("/__reload__", axum::routing::get(reload_sse))
+        .route("/reload-script.js", axum::routing::get(reload_script))
         .with_state(tx)
         .layer(disable_caching_layer)
         .fallback_service(ServeDir::new(path))
+}
+
+async fn reload_script() -> impl IntoResponse {
+    (
+        [("Content-Type", "application/javascript")],
+        include_str!("../res/reload-script.js"),
+    )
 }
 
 async fn reload_sse(

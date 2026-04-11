@@ -50,22 +50,7 @@ pub fn page(
     if include_hot_reload_script {
         write!(
             &mut additional_head_nodes,
-            r#"
-            <script>
-                const es = new EventSource("/__reload__");
-
-                es.onmessage = (e) => {{
-                    if (e.data === "reload") {{
-                        location.reload();
-                    }}
-                }};
-
-                // optional: reconnect logging
-                es.onerror = () => {{
-                    console.warn("Live reload disconnected, retrying...");
-                }};
-            </script>
-            "#
+            r#"<script defer src="/reload-script.js"></script>"#
         )?;
     }
 
