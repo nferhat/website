@@ -1,2 +1,5 @@
 /target
 .direnv
+# Testing website
+/test
+/dist
