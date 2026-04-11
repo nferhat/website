@@ -1,0 +1,29 @@
+<!doctype html>
+<html prefix="og: https://ogp.me/ns#">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+        <!-- OpenGraph metadata (translation: bullshit) required
+            so that platforms like social media (discord/etc.) create pretty embeds of the
+            website (so that the link doesn't look as suspicious? Also for search engines
+            I think this somewhat matters???)
+
+            Of course, it's generate from the rust side.
+         -->
+        |OPENGRAPH_METADATA|
+
+        <!-- The compiler handles stylesheets automatically.
+            We compile down SASS (that is passed to the CLI) into a minified CSS file.
+            This allows the browser to cache it efficiently.
+        -->
+        <link rel="stylesheet" href="|STYLESHEET|" />
+
+        |HEAD_NODES|
+    </head>
+
+    <body>
+        <!--FIX: Sidebar -->
+        |CONTENT|
+    </body>
+</html>
