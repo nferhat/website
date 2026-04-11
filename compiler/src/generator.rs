@@ -120,23 +120,33 @@ impl Generator {
             let position = child.position().unwrap().clone();
             self.generate_common(child, position, &mut body)?;
         }
-        // Generate footnotes at the end.
-        writeln!(&mut body, "<hr>")?;
-        let footnotes = self.footnotes.clone();
-        for (name, Footnote { contents }) in footnotes {
-            write!(
-                &mut body,
-                r#"<span class=footnote id="footnote-{id}">"#,
-                id = name
-            )?;
-            write!(
-                &mut body,
-                r#"<span class=footnote-id>({id})</span>"#,
-                id = name
-            )?;
-            for child in contents {
-                let position = child.position().unwrap().clone();
-                self.generate_common(child, position, &mut body)?;
+        if self.footnotes.len() > 0 {
+            // Generate footnotes at the end.
+            writeln!(&mut body, "<hr>")?;
+            let footnotes = self.footnotes.clone();
+            for (name, Footnote { contents }) in footnotes {
+                write!(
+                    &mut body,
+                    r#"<span class=footnote id="footnote-{id}">"#,
+                    id = name
+                )?;
+                write!(
+                    &mut body,
+                    r#"<span class=footnote-id>({id})</span>"#,
+                    id = name
+                )?;
+                for child in contents {
+                    let position = child.position().unwrap().clone();
+                    self.generate_common(child, position, &mut body)?;
+                }
+                // FIX: This system always gets you back to the first occurence of this footnote
+                // But footnotes should be unique, no?
+                writeln!(
+                    &mut body,
+                    r##"<a class=footnote-back href="#footnote-back-{id}">&#8617</a>"##,
+                    id = name
+                )?;
+                write!(&mut body, "</span>")?;
             }
             // FIX: This system always gets you back to the first occurence of this footnote
             // But footnotes should be unique, no?
