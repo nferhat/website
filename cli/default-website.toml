@@ -1,0 +1,37 @@
+# The website configuration file.
+
+[general]
+# The base URL of your website. This is where all assets are relative to.
+# If you are linking to `/assets/image.png`, the compiler will resolve it to
+# `https://nferhat.dev/assets/image.png`
+base-url = "https://nferhat.dev"
+
+[styling]
+# We use SASS for styling. It's not an option. You can slap some style.css inside the dist/
+# folder if you want. This parameter controls you want SCSS or SASS (See the different on
+# https://sass-lang.com)
+use-sass = true
+# The root file of your styling.
+#
+# By default, it also adds the directory containing this file into the sass load-paths.
+root-file = "./style/style.sass"
+# Additional directories to add to load-paths of the SASS compiler.
+#
+# This is needed if you have some SASS libraries shipped on npm
+# (I mean you shouldn't use them for something this simple but I digress)
+load-paths = []
+
+# Configuration for the blog system.
+[blog]
+# The base path where the compiler should find blogs. This affects not only where it
+# finds the markdown files but also where in the build folder it should output their
+# compiled html.
+#
+# If you set this to `articles/` and run the compiler, all .md files will be generated
+# inside `dist/articles/*.html`, with `dist/articles/index.html` being the "all articles"
+# page
+base-path = "./blog/"
+# Whether to include drafts into the "All blogs" page. Drafts are always accessible
+# (using their absolute path), however they are skipped from the listing, search, tag
+# search, etc.
+include-drafts = false

@@ -9,3 +9,11 @@ tracing-subscriber.workspace = true
 compiler.path = "../compiler"
 clap = { version = "4.6.0", features = ["derive"] }
 anyhow = "1.0.102"
+serde.workspace = true
+toml.workspace = true
+markdown.workspace = true
+axum = "0.8.8"
+tower-http = { version = "0.6.8", features = ["fs", "trace"] }
+tokio = { version = "1.51.1", features = ["full"] }
+futures = "0.3.32"
+notify = "8.2.0"

@@ -1,91 +1,87 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{env, path::PathBuf};
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use clap::Parser;
-use compiler::Generator;
+use tokio::runtime;
 
 #[macro_use]
 extern crate tracing;
 
+mod compiler;
+mod config;
+mod server;
+
 #[derive(clap::Parser)]
 struct Cli {
-    /// The directory containing the source markdown files.
+    /// The configuration path of the website. This determines the root of everything.
     #[arg(long, short)]
-    content_dir: PathBuf,
-    /// The path to the main SASS file
-    #[arg(long, short)]
-    style_input: Option<PathBuf>,
-    /// The output directory
-    #[arg(long, short)]
-    output_dir: PathBuf,
+    config: Option<PathBuf>,
+    /// The command to run.
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Clone, clap::Subcommand)]
+pub enum Command {
+    /// Builds the website.
+    Build,
+    /// Serves the website,
+    Serve {
+        #[arg(long)]
+        port: Option<u16>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
     setup_logger();
 
-    info!(
-        version = %std::env!("CARGO_PKG_VERSION"),
-        "Starting website-cli"
-    );
-
     let cli = Cli::parse();
+    // Determine where the root of the website is.
+    let root: PathBuf = if let Some(config_path) = &cli.config {
+        config_path.parent().context("no parent")?.to_owned()
+    } else {
+        // Try to use pwd if it contains a website.toml
+        let cwd = env::current_dir().context("failed to get cwd")?;
+        if cwd.join("website.toml").exists() {
+            cwd.to_owned()
+        } else {
+            bail!("Unable to find website root, make sure there's a website.toml file!");
+        }
+    };
 
-    _ = std::fs::remove_dir(&cli.output_dir);
-    if let Err(err) = std::fs::create_dir_all(&cli.output_dir) {
+    let build_dir = root.join("dist");
+    std::fs::remove_dir_all(&build_dir)?;
+    if let Err(err) = std::fs::create_dir_all(&build_dir) {
         bail!("Failed to create output directory: {err:?}")
     }
 
-    if let Some(style_input) = cli.style_input {
-        info!(?style_input, "Generating stylesheet from path");
-        if let Err(err) = generate_style(style_input, &cli.output_dir) {
-            bail!("Failed to generate style: {err:?}");
-        }
-    }
+    info!(?root, ?build_dir, "Found website");
 
-    let pages = compiler::page::get_pages(&cli.content_dir).unwrap();
-    info!(path = ?cli.content_dir, "Got {} pages in path", pages.len());
+    let config = config::load(root.join("website.toml"))?;
 
-    for page in pages {
-        let output_path = generate_output_path(&page.path, &cli.output_dir);
-        info!(source = ?page.path, output = ?output_path, "Generating page");
-        if let Err(err) = fs::create_dir_all(output_path.parent().unwrap()) {
-            bail!("Failed to create output directory: {err:?}");
-        }
+    let rt = runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
 
-        let generator = Generator::new(page, Some("/style.css"));
-        let html = generator.html().unwrap();
-        if let Err(err) = std::fs::write(&output_path, html) {
-            bail!("Failed to generate page: {err:?}");
+    rt.block_on(async move {
+        match cli.command {
+            Command::Build => compiler::build_all(&root, &build_dir, &config).await,
+            Command::Serve { port } => {
+                compiler::build_all(&root, &build_dir, &config).await?;
+                let port = port.unwrap_or(7272);
+                server::run(root, build_dir, config, port).await
+            }
         }
-    }
+    })?;
 
     Ok(())
-}
-
-fn generate_style(style_input: PathBuf, output_path: impl AsRef<Path>) -> anyhow::Result<()> {
-    let output_path = output_path.as_ref();
-    let import_path = style_input.parent().context("missing parent")?;
-    let sass_input = fs::read_to_string(&style_input)?;
-    let style_content = compiler::compile_to_stylesheet(&sass_input, &[import_path])?;
-    let style_path = output_path.join("style.css");
-    std::fs::write(&style_path, &style_content)?;
-    Ok(())
-}
-
-fn generate_output_path(path: impl AsRef<Path>, output_dir: impl AsRef<Path>) -> PathBuf {
-    let (path, output_dir) = (path.as_ref(), output_dir.as_ref());
-    let path = path.components().skip(2).collect::<PathBuf>();
-    output_dir.join(&path).with_extension("html")
 }
 
 fn setup_logger() {
     use std::str::FromStr as _;
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         // Allow fatal errors from every crate, compositor can log anything
-        tracing_subscriber::EnvFilter::from_str("trace").unwrap()
+        tracing_subscriber::EnvFilter::from_str("cli,compiler=debug,info").unwrap()
     });
     tracing_subscriber::fmt()
         .compact()
@@ -93,4 +89,9 @@ fn setup_logger() {
         .with_writer(std::io::stderr)
         .without_time()
         .init();
+
+    info!(
+        version = %std::env!("CARGO_PKG_VERSION"),
+        "Starting website-cli"
+    );
 }
