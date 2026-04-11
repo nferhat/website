@@ -14,6 +14,7 @@ pub fn page(
     content: &str,
     stylesheet_path: Option<&str>,
     include_math_script: bool,
+    include_hot_reload_script: bool,
 ) -> crate::Result<String> {
     let out = BLOG_PAGE_BASE;
 
@@ -45,6 +46,29 @@ pub fn page(
             <script defer id="mathjax" src="{MATHJAX_SCRIPT_URL}"></script>"#
         )?;
     }
+
+    if include_hot_reload_script {
+        write!(
+            &mut additional_head_nodes,
+            r#"
+            <script>
+                const es = new EventSource("/__reload__");
+
+                es.onmessage = (e) => {{
+                    if (e.data === "reload") {{
+                        location.reload();
+                    }}
+                }};
+
+                // optional: reconnect logging
+                es.onerror = () => {{
+                    console.warn("Live reload disconnected, retrying...");
+                }};
+            </script>
+            "#
+        )?;
+    }
+
     let out = out.replace("|HEAD_NODES|", &additional_head_nodes);
 
     Ok(out.replace("|CONTENT|", content))

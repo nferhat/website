@@ -58,7 +58,7 @@ pub async fn compile_file(input_path: &Path, output_path: &Path) -> anyhow::Resu
         bail!("Failed to create output directory: {err:?}");
     }
 
-    let generator = Generator::new(page, Some("/style.css"));
+    let generator = Generator::new(page, Some("/style.css"), true);
     let html = generator.html()?;
     Ok(html)
 }
@@ -115,7 +115,8 @@ pub async fn build_all(root: &PathBuf, build_dir: &PathBuf, config: &Config) -> 
         info!(source = ?page.path, output = ?output_path, "Generating page");
         fs::create_dir_all(output_path.parent().unwrap()).await?;
 
-        let generator = Generator::new(page, Some("/style.css"));
+        // Do not include hot reload script if we are building the final distribution content
+        let generator = Generator::new(page, Some("/style.css"), false);
         let html = generator.html().unwrap();
         if let Err(err) = std::fs::write(&output_path, html) {
             bail!("Failed to generate page: {err:?}");

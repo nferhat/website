@@ -28,6 +28,11 @@ use crate::{
 pub struct Generator {
     page: SitePage,
     stylesheet_path: Option<String>,
+
+    /// Whether this generator is gonna create HTML that's gonna be server through the dev server
+    /// (included inside the CLI)
+    is_dev: bool,
+
     /// Whether this sitepage has math.
     ///
     /// If `true`, we need to include a special math script from [MathJax](https://mathjax.org)
@@ -55,10 +60,11 @@ impl Generator {
     ///
     /// The `stylesheet` parameter will be the URL/path from where the page will load it's stylesheet.
     /// Essentially, it's the `href` parameter of a `<link rel="stylesheet"> tag.
-    pub fn new(page: SitePage, stylesheet: Option<impl Into<String>>) -> Self {
+    pub fn new(page: SitePage, stylesheet: Option<impl Into<String>>, is_dev: bool) -> Self {
         Self {
             page,
             stylesheet_path: stylesheet.map(Into::into),
+            is_dev,
             has_math: false,
             link_defs: HashMap::new(),
             invalid_links: HashSet::new(),
@@ -155,6 +161,7 @@ impl Generator {
             &body,
             self.stylesheet_path.as_ref().map(String::as_str),
             self.has_math,
+            self.is_dev,
         )
     }
 

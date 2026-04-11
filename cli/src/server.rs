@@ -3,16 +3,24 @@
 //! It was put up using the following example from Axum:
 //! <https://github.com/tokio-rs/axum/blob/main/examples/static-file-server/src/main.rs>
 
+use std::convert::Infallible;
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use axum::Router;
+use axum::extract::State;
+use axum::http::header::CACHE_CONTROL;
+use axum::response::Sse;
+use axum::response::sse::Event as SseEvent;
+use axum::{Router, http};
+use futures::StreamExt;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio::{fs, runtime};
+use tokio_stream::wrappers::BroadcastStream;
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::compiler::{compile_file, compile_styles};
@@ -25,17 +33,44 @@ pub async fn run(
     port: u16,
 ) -> anyhow::Result<()> {
     let config = Arc::new(config);
+    let (tx, _) = broadcast::channel::<()>(32);
     // watch_directory(&root, tx).await?;
     _ = tokio::join!(
-        serve(serve_build(&build_dir), port),
-        watch_for_changes(&root, &build_dir, Arc::clone(&config))
+        serve(serve_build(&build_dir, tx.clone()), port),
+        watch_for_changes(&root, &build_dir, Arc::clone(&config), tx)
     );
     Ok(())
 }
 
-fn serve_build(path: &Path) -> Router {
-    // serve the file in the "assets" directory under `/assets`
-    Router::new().fallback_service(ServeDir::new(path))
+fn serve_build(path: &Path, tx: broadcast::Sender<()>) -> Router {
+    // Disable caching in the browser.
+    let disable_caching_layer = SetResponseHeaderLayer::overriding(
+        CACHE_CONTROL,
+        http::HeaderValue::from_static("no-cache"),
+    );
+
+    Router::new()
+        // Hot reloading route. We use an SSE event with some additional javascript on the client to
+        // achieve this.
+        .route("/__reload__", axum::routing::get(reload_sse))
+        .with_state(tx)
+        .layer(disable_caching_layer)
+        .fallback_service(ServeDir::new(path))
+}
+
+async fn reload_sse(
+    State(tx): State<broadcast::Sender<()>>,
+) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
+    let rx = tx.subscribe();
+
+    let stream = BroadcastStream::new(rx).filter_map(|msg| async move {
+        match msg {
+            Ok(_) => Some(Ok(SseEvent::default().data("reload"))),
+            Err(_) => None,
+        }
+    });
+
+    Sse::new(stream)
 }
 
 fn async_watcher() -> notify::Result<(
@@ -66,6 +101,7 @@ async fn watch_for_changes(
     root: &Path,
     build_dir: &Path,
     config: Arc<Config>,
+    reload_sender: broadcast::Sender<()>,
 ) -> notify::Result<()> {
     // We gotta make it absolute for things to work here.
     // Notably, we use Path::strip_prefix in order to correctly calculate the build directories
@@ -108,6 +144,7 @@ async fn watch_for_changes(
                     }
                 }
 
+                reload_sender.send(()).ok();
                 info!("Rebuilt stylesheets")
             } else if is_markdown(&path) {
                 debug!(?path, "Triggering page rebuild due to path change");
@@ -130,6 +167,7 @@ async fn watch_for_changes(
                     }
                 }
 
+                reload_sender.send(()).ok();
                 info!(path = ?output_path, "Rebuilt page");
             }
         }
