@@ -13,7 +13,11 @@
 // TODO: Footnotes
 
 use fmt::Write;
-use std::fmt;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
+use url::Url;
 
 use markdown::{mdast, unist::Position};
 
@@ -30,6 +34,14 @@ pub struct Generator {
     /// If `true`, we need to include a special math script from [MathJax](https://mathjax.org)
     /// in order to properly handle/render math.
     has_math: bool,
+
+    /// Link definitions.
+    // FIXME: Optimization using Rc<str> could be interesting for huge pages with a lot of
+    // link definiitions? I don't think I'll be writing enough to actually reach the point where this
+    // compiler/transpiler will need this.
+    link_defs: HashMap<String, String>,
+    /// Unhandled link definitions that were used.
+    invalid_links: HashSet<String>,
 }
 
 impl Generator {
@@ -42,6 +54,8 @@ impl Generator {
             page,
             stylesheet_path: stylesheet.map(Into::into),
             has_math: false,
+            link_defs: HashMap::new(),
+            invalid_links: HashSet::new(),
         }
     }
 
@@ -60,6 +74,31 @@ impl Generator {
         let mdast::Node::Root(mut root) = contents.clone() else {
             unreachable!()
         };
+
+        // NOTE: Here I assume links to be the "definitions" to be link definitions.
+        //
+        // This would allow you todo the following:
+        // ```
+        // [This amazing link](thingy)
+        // [thingy]: https://github.com/whatever
+        // ```
+        //
+        // In order todo this, we need to run a pre-pass to finish the link definitions. This can be made
+        // as flexible as needed in the future (if we want to actually use dictionary definitions, which I
+        // don't think I'm gonna use for blogging)
+        for child in &root.children {
+            let mdast::Node::Definition(definition) = child else {
+                continue;
+            };
+
+            let id = &definition.identifier;
+            let new = &definition.url;
+            let prev = self.link_defs.insert(id.clone(), new.clone());
+            if let Some(prev) = prev {
+                // I don't think this should be intended, but still warn the user in case
+                warn!(%id, %prev, %new, "link re-defined");
+            }
+        }
 
         // We first need to generate the HTML for the children since we need to determine whether
         // the content has math in order to only include mathjax when needed.
@@ -97,11 +136,27 @@ impl Generator {
                     out,
                 )?;
             }
-
             mdast::Node::Break(_) => write!(out, "<br>")?,
+            mdast::Node::ThematicBreak(_) => write!(out, "<hr>")?,
+
             mdast::Node::InlineCode(inline_code) => {
                 self.generate_inline_code(inline_code, position, out)?
             }
+            mdast::Node::Code(code) => self.generate_codeblock(code, position, out)?,
+            mdast::Node::Delete(delete) => self.generate_strikethrough(delete, position, out)?,
+            mdast::Node::Emphasis(emphasis) => {
+                self.generate_node_with_children("em", &[], emphasis.children.into_iter(), out)?;
+            }
+            mdast::Node::Html(html) => write!(out, "{}", html.value)?,
+            mdast::Node::Strong(strong) => {
+                self.generate_node_with_children("strong", &[], strong.children.into_iter(), out)?;
+            }
+            mdast::Node::Text(text) => write!(out, "{}", text.value)?,
+            mdast::Node::Heading(heading) => self.generate_heading(heading, position, out)?,
+            mdast::Node::Paragraph(paragraph) => {
+                self.generate_node_with_children("p", &[], paragraph.children.into_iter(), out)?;
+            }
+
             mdast::Node::InlineMath(inline_math) => {
                 self.has_math = true;
                 write!(
@@ -114,29 +169,18 @@ impl Generator {
                 self.has_math = true;
                 write!(out, "<span class=math>\\[{}\\]</span>", math.value)?;
             }
-            mdast::Node::Delete(delete) => self.generate_strikethrough(delete, position, out)?,
-            mdast::Node::Emphasis(emphasis) => {
-                self.generate_node_with_children("em", &[], emphasis.children.into_iter(), out)?;
+
+            mdast::Node::Definition(_definition) => (), // definitions are handled in a pre-pass
+            mdast::Node::Link(link) => {
+                self.generate_link(link, position, out)?;
             }
-            mdast::Node::Html(html) => write!(out, "{}", html.value)?,
-            mdast::Node::Strong(strong) => {
-                self.generate_node_with_children("strong", &[], strong.children.into_iter(), out)?;
-            }
-            mdast::Node::Text(text) => write!(out, "{}", text.value)?,
-            mdast::Node::Code(code) => self.generate_codeblock(code, position, out)?,
-            mdast::Node::Heading(heading) => self.generate_heading(heading, position, out)?,
-            mdast::Node::ThematicBreak(_) => write!(out, "<hr>")?,
-            mdast::Node::Paragraph(paragraph) => {
-                self.generate_node_with_children("p", &[], paragraph.children.into_iter(), out)?;
+            mdast::Node::LinkReference(_link_reference) => {
+                unimplemented!("link references are not implemented, just use basic links!")
             }
 
             // FIX: images
             mdast::Node::Image(_image) => todo!(),
             mdast::Node::ImageReference(_image_reference) => todo!(),
-            // FIX: Links
-            mdast::Node::Link(_link) => todo!(),
-            mdast::Node::LinkReference(_link_reference) => todo!(),
-            mdast::Node::Definition(_definition) => todo!(),
             // FIX: Tables
             mdast::Node::Table(_table) => todo!(),
             mdast::Node::TableRow(_table_row) => todo!(),
@@ -209,6 +253,44 @@ impl Generator {
     ) -> Result {
         let res = codeblock::generate(position, &code)?;
         write!(out, "{res}")?;
+        Ok(())
+    }
+
+    fn generate_link(
+        &mut self,
+        link: mdast::Link,
+        position: Position,
+        out: &mut impl Write,
+    ) -> Result {
+        trace!(?position, "Got link");
+
+        write!(out, "<a ")?;
+        if let Some(title) = link.title {
+            write!(out, "title=\"{title}\" ")?;
+        }
+
+        // Now, depending on whether the given link is an url or not, we try to find the reference.
+        if Url::parse(&link.url).is_ok() {
+            write!(out, "href=\"{}\"", link.url)?;
+        } else {
+            // Otherwise, try to search for existing references.
+            // We are assured that all the link definitions of the document are here since we do a prepass.
+            if let Some(url) = self.link_defs.get(&link.url) {
+                write!(out, "href=\"{}\"", url)?;
+            } else {
+                self.invalid_links.insert(link.url.clone());
+            };
+        }
+
+        write!(out, ">")?;
+
+        for child in link.children {
+            let position = child.position().unwrap().clone();
+            self.generate_common(child, position, out)?;
+        }
+
+        write!(out, "</a>")?;
+
         Ok(())
     }
 
