@@ -84,7 +84,12 @@ fn parse_options() -> markdown::ParseOptions {
     }
 }
 
-pub async fn build_all(root: &PathBuf, build_dir: &PathBuf, config: &Config) -> anyhow::Result<()> {
+pub async fn build_all(
+    root: &PathBuf,
+    build_dir: &PathBuf,
+    config: &Config,
+    dev: bool,
+) -> anyhow::Result<()> {
     // We gotta make it absolute for things to work here.
     // Notably, we use Path::strip_prefix in order to correctly calculate the build directories
     let root = if root.is_absolute() {
@@ -116,7 +121,7 @@ pub async fn build_all(root: &PathBuf, build_dir: &PathBuf, config: &Config) -> 
         fs::create_dir_all(output_path.parent().unwrap()).await?;
 
         // Do not include hot reload script if we are building the final distribution content
-        let generator = Generator::new(page, Some("/style.css"), false);
+        let generator = Generator::new(page, Some("/style.css"), dev);
         let html = generator.html().unwrap();
         if let Err(err) = std::fs::write(&output_path, html) {
             bail!("Failed to generate page: {err:?}");
