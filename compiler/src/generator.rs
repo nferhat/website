@@ -215,6 +215,13 @@ impl Generator {
                 unimplemented!("link references are not implemented, just use basic links!")
             }
 
+            mdast::Node::Image(image) => {
+                self.generate_image(image, position, out)?;
+            }
+            mdast::Node::ImageReference(_image_reference) => {
+                unimplemented!("image references are not implemented, just use basic images!")
+            }
+
             mdast::Node::FootnoteDefinition(_footnote_definition) => {
                 unreachable!("footnote definitions are handled in the pre-pass")
             }
@@ -337,6 +344,49 @@ impl Generator {
         }
 
         write!(out, "</a>")?;
+
+        Ok(())
+    }
+
+    // Basically the same as generate_link
+    fn generate_image(
+        &mut self,
+        image: mdast::Image,
+        position: Position,
+        out: &mut impl Write,
+    ) -> Result {
+        trace!(?position, "Got image");
+
+        // Additional div to make a cool popout effect using css
+        write!(
+            out,
+            r#"<div class=image-container><img alt="{}" "#,
+            image.alt
+        )?;
+        if let Some(title) = &image.title {
+            write!(out, r#"title="{}" "#, title)?;
+        }
+
+        // Now, depending on whether the given link is an url or not, we try to find the reference.
+        if Url::parse(&image.url).is_ok() {
+            write!(out, "src=\"{}\"", image.url)?;
+        } else {
+            // Otherwise, try to search for existing references. The same as link references.
+            // This allow for flexibility in case the user wants (or not) to show the image as content
+            // or just link to it.
+            if let Some(url) = self.link_defs.get(&image.url) {
+                write!(out, "src=\"{}\"", url)?;
+            } else {
+                self.invalid_links.insert(image.url.clone());
+            };
+        }
+        write!(out, ">")?;
+
+        if let Some(title) = &image.title {
+            write!(out, r#"<span class=image-title>{}</span>"#, title)?;
+        }
+
+        write!(out, "</div>")?;
 
         Ok(())
     }
