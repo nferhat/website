@@ -27,6 +27,7 @@ pub struct Frontmatter {
     /// The title of this page.
     pub title: String,
     /// The tags of this page.
+    #[serde(default = "Vec::new")]
     pub tags: Vec<String>,
     /// Whether this page is a draft.
     ///
@@ -34,6 +35,9 @@ pub struct Frontmatter {
     /// it's link (if you know it, of course). This is essentially a unlisted option.
     #[serde(default = "default_true")]
     pub draft: bool,
+    /// Whether to include the little metadata line below the page title.
+    #[serde(default)]
+    pub metadata: bool,
 }
 
 pub fn from_str(s: &str) -> Result<Frontmatter, toml::de::Error> {

@@ -12,6 +12,7 @@ mod generator;
 pub mod generators;
 pub mod page;
 mod style;
+mod utils;
 
 pub use generator::Generator;
 pub use style::compile_to_stylesheet;
