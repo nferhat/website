@@ -4,10 +4,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-const fn default_true() -> bool {
-    true
-}
-
 fn default_root_file() -> PathBuf {
     PathBuf::from("style/style.sass")
 }
@@ -24,19 +20,28 @@ pub struct Config {
     /// `https://nferhat.dev/assets/image.png`
     pub base_url: String,
     /// Styling configuration.
-    pub styling: Styling,
+    pub styling: StylingConfig,
     /// Configuration for the blog system.
-    pub blog: Blog,
+    pub blog: BlogConfig,
+}
+
+impl Config {
+    pub fn load(path: impl AsRef<Path>) -> Result<Config, Error> {
+        let path = path.as_ref();
+        debug!(?path, "Loading website configuration");
+        let contents = std::fs::read_to_string(path)?;
+        let config = toml::from_str(&contents)?;
+        Ok(config)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct Styling {
+pub struct StylingConfig {
     /// We use SASS for styling. It's not an option. You can slap some style.css inside the dist/
     /// folder if you want. This parameter controls you want SCSS or SASS (See the different on
     /// https://sass-lang.com)
-    #[serde(default = "default_true")]
-    pub use_sass: bool,
+    pub use_sass: Option<bool>,
     /// The root file of your styling.
     ///
     /// By default, it also adds the directory containing this file into the sass load-paths.
@@ -51,7 +56,7 @@ pub struct Styling {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct Blog {
+pub struct BlogConfig {
     /// The base path where the compiler should find blogs. This affects not only where it
     /// finds the markdown files but also where in the build folder it should output their
     /// compiled html.
@@ -67,10 +72,11 @@ pub struct Blog {
     pub include_drafts: bool,
 }
 
-pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Config> {
-    let path = path.as_ref();
-    debug!(?path, "Loading website configuration");
-    let contents = std::fs::read_to_string(path)?;
-    let config = toml::from_str(&contents)?;
-    Ok(config)
+/// Error that can happen when reading the config.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("TOML error: {0}")]
+    Toml(#[from] toml::de::Error),
 }

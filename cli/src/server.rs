@@ -14,6 +14,7 @@ use axum::http::header::CACHE_CONTROL;
 use axum::response::sse::Event as SseEvent;
 use axum::response::{IntoResponse, Sse};
 use axum::{Router, http};
+use compiler::Config;
 use futures::StreamExt;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use tokio::sync::{broadcast, mpsc};
@@ -23,8 +24,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::compiler::{compile_file, compile_styles};
-use crate::config::Config;
+use crate::compiler_fe::{compile_file, compile_styles};
 
 pub async fn run(
     root: PathBuf,
@@ -134,8 +134,7 @@ async fn watch_for_changes(
             if is_style(&path) {
                 debug!(?path, "Triggering stylesheets rebuild due to path change");
                 let style_input = root.join(&config.styling.root_file);
-                let contents = match compile_styles(&style_input, &config.styling.load_paths).await
-                {
+                let contents = match compile_styles(&style_input, &config.styling).await {
                     Ok(contents) => contents,
                     Err(err) => {
                         error!(?err, "Failed to rebuild stylesheets");
@@ -159,7 +158,12 @@ async fn watch_for_changes(
                 let path_relative = path.strip_prefix(&root).expect("relative to root");
                 let output_path = build_dir.join(path_relative).with_extension("html");
 
-                let contents = match compile_file(&path, &output_path).await {
+                if let Err(err) = fs::create_dir_all(output_path.parent().unwrap()).await {
+                    error!(?err, "Failed to create build parent directory");
+                    continue;
+                }
+
+                let contents = match compile_file(&path, &config, true).await {
                     Ok(contents) => contents,
                     Err(err) => {
                         error!(?err, ?path_relative, "Failed to rebuild page");

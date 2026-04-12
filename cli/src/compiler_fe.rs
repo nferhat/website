@@ -1,32 +1,49 @@
+//! compiler_fe.rs -*- compiler **f**ront **e**nd.
+//! Just some helper functions to compile files down, so that other parts of the code dont have to touch it.
+
 use anyhow::bail;
 use compiler::page::SitePage;
-use compiler::{Generator, frontmatter};
+use compiler::{Config, Generator, StylingConfig, frontmatter};
 use markdown::mdast;
 use std::env;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tokio::task::spawn_blocking;
 
 use anyhow::Context;
 
-use crate::config::Config;
-
-pub async fn compile_styles(style_input: &Path, load_paths: &[PathBuf]) -> anyhow::Result<String> {
+pub async fn compile_styles(
+    style_input: impl AsRef<Path>,
+    config: &StylingConfig,
+) -> anyhow::Result<String> {
+    let style_input = style_input.as_ref();
     // include the file's parent directory in the import paths
     let import_path = style_input.parent().context("missing parent")?.to_owned();
     let sass_input = fs::read_to_string(&style_input).await?;
-    let mut load_paths = Vec::from(load_paths);
+    // and also what the user wants us to import
+    let mut load_paths = config.load_paths.clone();
     load_paths.push(import_path);
 
-    let style_content = compiler::compile_to_stylesheet(&sass_input, &load_paths)?;
+    // asyncify the compiling process, since it might read from other files on the filesystem and such
+    // I don't know if this even helps but who am I to talk
+    let style_content =
+        match spawn_blocking(move || compiler::compile_to_stylesheet(&sass_input, &load_paths))
+            .await
+        {
+            Ok(res) => res.context("failed to parse css"),
+            Err(_) => Err(anyhow::anyhow!("background task failed")),
+        };
+    let style_content = style_content.context("failed to compile stylesheet")?;
     Ok(style_content)
 }
 
-pub async fn compile_file(input_path: &Path, output_path: &Path) -> anyhow::Result<String> {
-    let name = input_path
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+pub async fn compile_file(
+    input_path: impl AsRef<Path>,
+    _config: &Config,
+    dev: bool,
+) -> anyhow::Result<String> {
+    let input_path = input_path.as_ref();
+    let name = input_path.file_name().unwrap();
     let raw_content = fs::read_to_string(input_path).await?;
     let mut contents = markdown::to_mdast(&raw_content, &parse_options())
         .map_err(|msg| anyhow::anyhow!("failed to parse markdown: {msg:?}"))?;
@@ -48,17 +65,13 @@ pub async fn compile_file(input_path: &Path, output_path: &Path) -> anyhow::Resu
     let frontmatter = frontmatter::from_str(&frontmatter_str)?;
 
     let page = SitePage {
-        name,
+        name: name.to_string_lossy().to_string(),
         path: input_path.to_owned(),
         frontmatter,
         contents,
     };
 
-    if let Err(err) = fs::create_dir_all(output_path.parent().unwrap()).await {
-        bail!("Failed to create output directory: {err:?}");
-    }
-
-    let generator = Generator::new(page, Some("/style.css"), true);
+    let generator = Generator::new(page, Some("/style.css"), dev);
     let html = generator.html()?;
     Ok(html)
 }
@@ -99,7 +112,7 @@ pub async fn build_all(
     };
 
     let style_input = root.join(&config.styling.root_file);
-    let contents = compile_styles(&style_input, &config.styling.load_paths)
+    let contents = compile_styles(&style_input, &config.styling)
         .await
         .context("failed to build stylesheets")?;
 
@@ -121,9 +134,8 @@ pub async fn build_all(
         fs::create_dir_all(output_path.parent().unwrap()).await?;
 
         // Do not include hot reload script if we are building the final distribution content
-        let generator = Generator::new(page, Some("/style.css"), dev);
-        let html = generator.html().unwrap();
-        if let Err(err) = std::fs::write(&output_path, html) {
+        let html = compile_file(&page.path, config, dev).await?;
+        if let Err(err) = fs::write(&output_path, html).await {
             bail!("Failed to generate page: {err:?}");
         }
     }

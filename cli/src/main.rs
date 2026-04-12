@@ -7,8 +7,7 @@ use tokio::runtime;
 #[macro_use]
 extern crate tracing;
 
-mod compiler;
-mod config;
+mod compiler_fe;
 mod server;
 
 #[derive(clap::Parser)]
@@ -57,17 +56,16 @@ fn main() -> anyhow::Result<()> {
 
     info!(?root, ?build_dir, "Found website");
 
-    let config = config::load(root.join("website.toml"))?;
-
+    let config = compiler::Config::load(root.join("website.toml"))?;
     let rt = runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
 
     rt.block_on(async move {
         match cli.command {
-            Command::Build => compiler::build_all(&root, &build_dir, &config, false).await,
+            Command::Build => compiler_fe::build_all(&root, &build_dir, &config, false).await,
             Command::Serve { port } => {
-                compiler::build_all(&root, &build_dir, &config, true).await?;
+                compiler_fe::build_all(&root, &build_dir, &config, true).await?;
                 let port = port.unwrap_or(7272);
                 server::run(root, build_dir, config, port).await
             }
