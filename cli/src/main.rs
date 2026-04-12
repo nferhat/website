@@ -81,7 +81,7 @@ fn setup_logger() {
     use std::str::FromStr as _;
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         // Allow fatal errors from every crate, compositor can log anything
-        tracing_subscriber::EnvFilter::from_str("cli,compiler=debug,info").unwrap()
+        tracing_subscriber::EnvFilter::from_str("cli,compiler=info,warn").unwrap()
     });
     tracing_subscriber::fmt()
         .compact()
