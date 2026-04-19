@@ -14,49 +14,30 @@ use axum::http::header::CACHE_CONTROL;
 use axum::response::sse::Event as SseEvent;
 use axum::response::{IntoResponse, Sse};
 use axum::{Router, http};
-use compiler::Config;
+use compiler::{Compiler, Config};
 use futures::StreamExt;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
+use tokio::runtime;
 use tokio::sync::{broadcast, mpsc};
-use tokio::{fs, runtime};
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::compiler_fe::{compile_file, compile_styles};
-
-pub async fn run(
-    root: PathBuf,
-    build_dir: PathBuf,
-    config: Config,
-    port: u16,
-) -> anyhow::Result<()> {
+pub async fn run(root: PathBuf, config: Config, port: u16) -> anyhow::Result<()> {
     let config = Arc::new(config);
-    let (tx, _) = broadcast::channel::<()>(32);
-    // watch_directory(&root, tx).await?;
+    let mut compiler = Compiler::new(root.clone().into_boxed_path(), &config);
+    // First do a full-pass compilation
+    compiler.compile_all().await?;
+
+    let (reload_sender, _) = broadcast::channel::<()>(32);
+    let build_dir = root.join("dist");
     _ = tokio::join!(
-        serve(serve_build(&build_dir, tx.clone()), port),
-        watch_for_changes(&root, &build_dir, Arc::clone(&config), tx)
+        serve(reload_sender.clone(), &build_dir, port),
+        watch_for_changes(&root, compiler, reload_sender.clone())
     );
+
     Ok(())
-}
-
-fn serve_build(path: &Path, tx: broadcast::Sender<()>) -> Router {
-    // Disable caching in the browser.
-    let disable_caching_layer = SetResponseHeaderLayer::overriding(
-        CACHE_CONTROL,
-        http::HeaderValue::from_static("no-cache"),
-    );
-
-    Router::new()
-        // Hot reloading route. We use an SSE event with some additional javascript on the client to
-        // achieve this. We also include the script needed to reload.
-        .route("/__reload__", axum::routing::get(reload_sse))
-        .route("/reload-script.js", axum::routing::get(reload_script))
-        .with_state(tx)
-        .layer(disable_caching_layer)
-        .fallback_service(ServeDir::new(path))
 }
 
 async fn reload_script() -> impl IntoResponse {
@@ -72,6 +53,7 @@ async fn reload_sse(
     let rx = tx.subscribe();
 
     let stream = BroadcastStream::new(rx).filter_map(|msg| async move {
+        dbg!(&msg);
         match msg {
             Ok(_) => Some(Ok(SseEvent::default().data("reload"))),
             Err(_) => None,
@@ -107,8 +89,7 @@ fn async_watcher() -> notify::Result<(
 
 async fn watch_for_changes(
     root: &Path,
-    build_dir: &Path,
-    config: Arc<Config>,
+    mut compiler: Compiler,
     reload_sender: broadcast::Sender<()>,
 ) -> notify::Result<()> {
     // We gotta make it absolute for things to work here.
@@ -133,54 +114,29 @@ async fn watch_for_changes(
         for path in event.paths {
             if is_style(&path) {
                 debug!(?path, "Triggering stylesheets rebuild due to path change");
-                let style_input = root.join(&config.styling.root_file);
-                let contents = match compile_styles(&style_input, &config.styling).await {
-                    Ok(contents) => contents,
-                    Err(err) => {
-                        error!(?err, "Failed to rebuild stylesheets");
-                        continue;
+                match compiler.recompile_stylesheets().await {
+                    Ok(()) => {
+                        reload_sender.send(()).ok();
+                        info!("Rebuilt stylesheets")
                     }
-                };
-
-                let output_path = build_dir.join("style.css");
-                match fs::write(&output_path, contents).await {
-                    Ok(()) => (),
                     Err(err) => {
-                        error!(?err, "Failed to write new stylesheet contents");
+                        warn!(?err, "Failed to rebuild stylesheets");
                         continue;
                     }
                 }
-
-                reload_sender.send(()).ok();
-                info!("Rebuilt stylesheets")
             } else if is_markdown(&path) {
                 debug!(?path, "Triggering page rebuild due to path change");
-                let path_relative = path.strip_prefix(&root).expect("relative to root");
-                let output_path = build_dir.join(path_relative).with_extension("html");
 
-                if let Err(err) = fs::create_dir_all(output_path.parent().unwrap()).await {
-                    error!(?err, "Failed to create build parent directory");
-                    continue;
-                }
-
-                let contents = match compile_file(&path, &config, true).await {
-                    Ok(contents) => contents,
-                    Err(err) => {
-                        error!(?err, ?path_relative, "Failed to rebuild page");
-                        continue;
+                match compiler.recompile_page(&path).await {
+                    Ok(()) => {
+                        reload_sender.send(()).ok();
+                        info!(?path, "Rebuilt page")
                     }
-                };
-
-                match fs::write(&output_path, contents).await {
-                    Ok(()) => (),
                     Err(err) => {
-                        error!(?err, "Failed to write new stylesheet contents");
+                        warn!(?err, "Failed to rebuild page");
                         continue;
                     }
                 }
-
-                reload_sender.send(()).ok();
-                info!(path = ?output_path, "Rebuilt page");
             }
         }
     }
@@ -204,7 +160,22 @@ fn is_markdown(p: &Path) -> bool {
     ext == "md" || ext == "markdown" || ext == "mdown"
 }
 
-async fn serve(app: Router, port: u16) -> anyhow::Result<()> {
+async fn serve(tx: broadcast::Sender<()>, path: &Path, port: u16) -> anyhow::Result<()> {
+    // Disable caching in the browser.
+    let disable_caching_layer = SetResponseHeaderLayer::overriding(
+        CACHE_CONTROL,
+        http::HeaderValue::from_static("no-cache"),
+    );
+
+    let app = Router::new()
+        // Hot reloading route. We use an SSE event with some additional javascript on the client to
+        // achieve this. We also include the script needed to reload.
+        .route("/__reload__", axum::routing::get(reload_sse))
+        .route("/reload-script.js", axum::routing::get(reload_script))
+        .with_state(tx)
+        .layer(disable_caching_layer)
+        .fallback_service(ServeDir::new(path));
+
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     debug!("listening on {}", listener.local_addr().unwrap());

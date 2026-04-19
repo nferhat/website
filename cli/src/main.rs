@@ -1,13 +1,13 @@
-use std::{env, path::PathBuf};
+use std::{env, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, bail};
 use clap::Parser;
+use compiler::Compiler;
 use tokio::runtime;
 
 #[macro_use]
 extern crate tracing;
 
-mod compiler_fe;
 mod server;
 
 #[derive(clap::Parser)]
@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let build_dir = root.join("dist");
-    std::fs::remove_dir_all(&build_dir)?;
+    _ = std::fs::remove_dir_all(&build_dir);
     if let Err(err) = std::fs::create_dir_all(&build_dir) {
         bail!("Failed to create output directory: {err:?}")
     }
@@ -63,11 +63,15 @@ fn main() -> anyhow::Result<()> {
 
     rt.block_on(async move {
         match cli.command {
-            Command::Build => compiler_fe::build_all(&root, &build_dir, &config, false).await,
+            Command::Build => {
+                let config = Arc::new(config);
+                let mut compiler = Compiler::new(root.clone().into_boxed_path(), &config);
+                compiler.compile_all().await?;
+                Ok(())
+            }
             Command::Serve { port } => {
-                compiler_fe::build_all(&root, &build_dir, &config, true).await?;
                 let port = port.unwrap_or(7272);
-                server::run(root, build_dir, config, port).await
+                server::run(root, config, port).await
             }
         }
     })?;
@@ -79,7 +83,7 @@ fn setup_logger() {
     use std::str::FromStr as _;
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         // Allow fatal errors from every crate, compositor can log anything
-        tracing_subscriber::EnvFilter::from_str("cli,compiler=info,warn").unwrap()
+        tracing_subscriber::EnvFilter::from_str("cli,compiler=debug,warn").unwrap()
     });
     tracing_subscriber::fmt()
         .compact()

@@ -19,6 +19,6 @@ in pkgs.mkShell rec {
     ])
   ];
 
-  buildInputs = with pkgs; [];
+  buildInputs = with pkgs; [shopify-cli];
   LD_LIBRARY_PATH = lib.makeLibraryPath buildInputs;
 }

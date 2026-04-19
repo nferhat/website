@@ -1,59 +1,28 @@
-//! A generator for a single [`SitePage`](super::page::SitePage).
+//! A generator for a site content.
 //!
-//! A central state structure is needed when generating a page, in order to keep track of different
-//! things such as:
-//!
-//! 1. Links and make sure they are valid (at least links to other parts of the page)
-//! 2. All headers of this page, in order to generate a TOC
-//! 3. Footnotes, since they are basically a pretty hashmap with links for going back and forth.
-//! 4. Other misc stuff, for better logging.
+//! This is strictly for the body/content, IE transforming markdown nodes into actual other nodes.
+//! This does not generate a full page.
 
 // TODO: Table of contents(TOC)
 
 use fmt::Write;
-use std::{
-    collections::{HashMap, HashSet},
-    fmt,
-};
+use std::fmt;
 use url::Url;
 
-use markdown::{mdast, unist::Position};
-
-use crate::{
-    Result,
-    generators::{blog, codeblock},
-    page::SitePage,
-    utils::{count_words, estimate_reading_time_min_sec},
+use markdown::{
+    mdast::{self, Node},
+    unist::Position,
 };
 
+use crate::{Result, generators::codeblock};
+
 pub struct Generator {
-    page: SitePage,
-    stylesheet_path: Option<String>,
-
-    /// Whether this generator is gonna create HTML that's gonna be server through the dev server
-    /// (included inside the CLI)
-    is_dev: bool,
-
+    root_node: Node,
     /// Whether this sitepage has math.
     ///
     /// If `true`, we need to include a special math script from [MathJax](https://mathjax.org)
     /// in order to properly handle/render math.
-    has_math: bool,
-
-    /// Link definitions.
-    // FIXME: Optimization using Rc<str> could be interesting for huge pages with a lot of
-    // link definiitions? I don't think I'll be writing enough to actually reach the point where this
-    // compiler/transpiler will need this.
-    link_defs: HashMap<String, String>,
-    /// Unhandled link definitions that were used.
-    invalid_links: HashSet<String>,
-    /// Footnote definitions.
-    footnotes: HashMap<String, Footnote>,
-}
-
-#[derive(Clone)]
-struct Footnote {
-    contents: Vec<mdast::Node>,
+    pub has_math: bool,
 }
 
 impl Generator {
@@ -61,138 +30,62 @@ impl Generator {
     ///
     /// The `stylesheet` parameter will be the URL/path from where the page will load it's stylesheet.
     /// Essentially, it's the `href` parameter of a `<link rel="stylesheet"> tag.
-    pub fn new(page: SitePage, stylesheet: Option<impl Into<String>>, is_dev: bool) -> Self {
+    pub fn new(root_node: Node) -> Self {
         Self {
-            page,
-            stylesheet_path: stylesheet.map(Into::into),
-            is_dev,
+            root_node,
             has_math: false,
-            link_defs: HashMap::new(),
-            invalid_links: HashSet::new(),
-            footnotes: HashMap::new(),
         }
     }
 
-    pub fn html(mut self) -> Result<String> {
-        // FIX: This is currently only a blog generator
-        let SitePage {
-            name,
-            path,
-            contents,
-            frontmatter,
-        } = &self.page;
-        let frontmatter = frontmatter.clone();
-        info!(%name, ?path, "Generating HTML for page");
-
+    pub fn to_html(mut self) -> Result<String> {
         // FIX: Clone since we use self methods in the generator loop.
-        let mdast::Node::Root(mut root) = contents.clone() else {
+        let mdast::Node::Root(mut root) = self.root_node.clone() else {
             unreachable!()
         };
 
-        info!("running pre-pass");
-        let mut remaining_children = Vec::with_capacity(root.children.len());
-        for child in root.children.drain(..) {
-            match child {
-                mdast::Node::Definition(definition) => {
-                    let id = definition.identifier;
-                    let new = definition.url;
-                    let prev = self.link_defs.insert(id.clone(), new.clone());
-                    if let Some(prev) = prev {
-                        // I don't think this should be intended, but still warn the user in case
-                        warn!(%id, %prev, %new, "link re-defined");
-                    }
-                }
-                mdast::Node::FootnoteDefinition(footnote_def) => {
-                    let id = &footnote_def.identifier;
-                    let contents = footnote_def.children;
-                    let prev = self.footnotes.insert(id.clone(), Footnote { contents });
-                    if let Some(_) = prev {
-                        // I don't think this should be intended, but still warn the user in case
-                        warn!(%id, "footnote re-defined");
-                    }
-                }
-                x => remaining_children.push(x),
-            }
-        }
-        info!(
-            footnotes = self.footnotes.len(),
-            link_definitions = self.link_defs.len(),
-            "pre-pass results",
-        );
+        // NOTE: Before there was a "pre-pass" here in order to ensure correct links and whatnot.
+        // But it turns out the [`markdown`] crate already handles this for us and doesn't give us
+        // references/footnotes to stuff that doesn't exist, and instead just emits Text nodes.
 
         // We first need to generate the HTML for the children since we need to determine whether
         // the content has math in order to only include mathjax when needed.
         let mut body = String::new();
 
-        // Before children, we generate a little paragraph with metadata with the title
-        writeln!(
-            &mut body,
-            "<h1 class={class}>{txt}</h1>",
-            class = if !frontmatter.metadata {
-                "pad-down"
-            } else {
-                ""
-            },
-            txt = frontmatter.title
-        )?;
+        // FIXME: Move to compiler
+        // // Before children, we generate a little paragraph with metadata with the title
+        // writeln!(
+        //     &mut body,
+        //     "<h1 class={class}>{txt}</h1>",
+        //     class = if !frontmatter.metadata {
+        //         "pad-down"
+        //     } else {
+        //         ""
+        //     },
+        //     txt = frontmatter.title
+        // )?;
 
-        if frontmatter.metadata {
-            let word_count = count_words(&contents);
-            let reading_speed = 175.0; // FIX: Not hardcode
-            let (minutes, seconds) = estimate_reading_time_min_sec(word_count, reading_speed);
-            write!(
-                &mut body,
-                "<p class=metadata>{word_count} words &bull; {minutes}'{seconds}\""
-            )?;
-            if frontmatter.tags.len() >= 1 {
-                for tag in &frontmatter.tags {
-                    write!(&mut body, " &bull; #{tag}")?;
-                }
-            }
-            writeln!(&mut body, "</p>")?;
-        }
+        // if frontmatter.metadata {
+        //     let word_count = count_words(&contents);
+        //     let reading_speed = 175.0; // FIX: Not hardcode
+        //     let (minutes, seconds) = estimate_reading_time_min_sec(word_count, reading_speed);
+        //     write!(
+        //         &mut body,
+        //         "<p class=metadata>{word_count} words &bull; {minutes}'{seconds}\""
+        //     )?;
+        //     if frontmatter.tags.len() >= 1 {
+        //         for tag in &frontmatter.tags {
+        //             write!(&mut body, " &bull; #{tag}")?;
+        //         }
+        //     }
+        //     writeln!(&mut body, "</p>")?;
+        // }
 
-        for child in remaining_children.drain(..) {
+        for child in root.children.drain(..) {
             let position = child.position().unwrap().clone();
             self.generate_common(child, position, &mut body)?;
         }
-        if self.footnotes.len() > 0 {
-            // Generate footnotes at the end.
-            writeln!(&mut body, "<hr>")?;
-            let footnotes = self.footnotes.clone();
-            for (name, Footnote { contents }) in footnotes {
-                write!(
-                    &mut body,
-                    r#"<span class=footnote id="footnote-{id}">"#,
-                    id = name
-                )?;
-                write!(
-                    &mut body,
-                    r#"<span class=footnote-id>({id})</span>"#,
-                    id = name
-                )?;
-                for child in contents {
-                    let position = child.position().unwrap().clone();
-                    self.generate_common(child, position, &mut body)?;
-                }
-                // FIX: This system always gets you back to the first occurence of this footnote
-                // But footnotes should be unique, no?
-                writeln!(
-                    &mut body,
-                    r##"<a class=footnote-back href="#footnote-back-{id}">&#8617</a>"##,
-                    id = name
-                )?;
-                write!(&mut body, "</span>")?;
-            }
-        }
 
-        blog::page(
-            &frontmatter,
-            &body,
-            self.stylesheet_path.as_ref().map(String::as_str),
-            self.has_math,
-            self.is_dev,
-        )
+        Ok(body)
     }
 
     fn generate_common(
@@ -245,7 +138,7 @@ impl Generator {
             }
 
             mdast::Node::Definition(_definition) => {
-                unreachable!("link definitions are handled in the pre-pass")
+                // unreachable!("link definitions are handled in the pre-pass")
             }
             mdast::Node::Link(link) => {
                 self.generate_link(link, position, out)?;
@@ -261,8 +154,29 @@ impl Generator {
                 unimplemented!("image references are not implemented, just use basic images!")
             }
 
-            mdast::Node::FootnoteDefinition(_footnote_definition) => {
-                unreachable!("footnote definitions are handled in the pre-pass")
+            mdast::Node::FootnoteDefinition(def) => {
+                write!(
+                    out,
+                    r#"<span class=footnote id="footnote-{}">"#,
+                    def.identifier
+                )?;
+                write!(
+                    out,
+                    r#"<span class=footnote-id>({})</span>"#,
+                    def.identifier
+                )?;
+
+                for child in def.children {
+                    let position = child.position().unwrap().clone();
+                    self.generate_common(child, position, out)?;
+                }
+
+                writeln!(
+                    out,
+                    r##"<a class=footnote-back href="#footnote-back-{}">&#8617</a>"##,
+                    def.identifier
+                )?;
+                write!(out, "</span>")?;
             }
             mdast::Node::FootnoteReference(fref) => {
                 let mdast::FootnoteReference { identifier, .. } = fref;
@@ -359,11 +273,14 @@ impl Generator {
         } else {
             // Otherwise, try to search for existing references.
             // We are assured that all the link definitions of the document are here since we do a prepass.
-            if let Some(url) = self.link_defs.get(&link.url) {
-                write!(out, "href=\"{}\"", url)?;
-            } else {
-                self.invalid_links.insert(link.url.clone());
-            };
+
+            // if let Some(url) = self.link_defs.get(&link.url) {
+            //     write!(out, "href=\"{}\"", url)?;
+            // } else {
+            //     self.invalid_links.insert(link.url.clone());
+            // };
+
+            // FIX: I simplified the generator here
         }
 
         write!(out, ">")?;
@@ -404,11 +321,14 @@ impl Generator {
             // Otherwise, try to search for existing references. The same as link references.
             // This allow for flexibility in case the user wants (or not) to show the image as content
             // or just link to it.
-            if let Some(url) = self.link_defs.get(&image.url) {
-                write!(out, "src=\"{}\"", url)?;
-            } else {
-                self.invalid_links.insert(image.url.clone());
-            };
+
+            // if let Some(url) = self.link_defs.get(&image.url) {
+            //     write!(out, "src=\"{}\"", url)?;
+            // } else {
+            //     self.invalid_links.insert(image.url.clone());
+            // };
+
+            // FIX: I simplified things here
         }
         write!(out, ">")?;
 

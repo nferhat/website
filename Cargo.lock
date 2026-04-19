@@ -250,12 +250,14 @@ name = "compiler"
 version = "0.1.0"
 dependencies = [
  "codemap",
+ "futures",
  "grass",
  "html-escape",
  "markdown",
  "render",
  "serde",
  "thiserror",
+ "tokio",
  "toml",
  "tracing",
  "url",

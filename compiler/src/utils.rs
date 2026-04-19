@@ -2,6 +2,7 @@ use markdown::mdast::Node;
 
 /// Counts all the words inside of a given node. You should pass in the root node
 /// here to get all the words inside a document.
+#[allow(unused)]
 pub fn count_words(node: &Node) -> usize {
     match node {
         Node::Text(text) => count_words_in_text(&text.value),
@@ -26,12 +27,14 @@ pub fn count_words(node: &Node) -> usize {
     }
 }
 
+#[allow(unused)]
 fn count_words_in_text(s: &str) -> usize {
     s.split_whitespace().count()
 }
 
 /// Estimate the reading time in `(minutes, seconds)` with a given word-per-minute
 /// reading speed. You should adapt this on the blog itself
+#[allow(unused)]
 pub fn estimate_reading_time_min_sec(word_count: usize, wpm: f64) -> (usize, usize) {
     let total_seconds = ((word_count as f64 / wpm) * 60.0).round() as usize;
     (total_seconds / 60, total_seconds % 60)

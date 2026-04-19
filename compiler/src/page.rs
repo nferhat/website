@@ -37,7 +37,7 @@ pub struct SitePage {
 /// Options used to do the parsing of the config.
 ///
 /// It's GFM+some additional stuff enabled.
-fn parse_options() -> markdown::ParseOptions {
+pub(super) fn parse_options() -> markdown::ParseOptions {
     markdown::ParseOptions {
         constructs: markdown::Constructs {
             autolink: true,
