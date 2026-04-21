@@ -188,13 +188,18 @@ impl Generator {
                 )?;
             }
 
+            mdast::Node::List(list) => {
+                let tag = if list.ordered { "ol" } else { "ul" };
+                self.generate_node_with_children(tag, &[], list.children, out)?;
+            }
+            mdast::Node::ListItem(list_item) => {
+                self.generate_node_with_children("li", &[], list_item.children, out)?;
+            }
+
             // FIX: Tables
             mdast::Node::Table(_table) => todo!(),
             mdast::Node::TableRow(_table_row) => todo!(),
             mdast::Node::TableCell(_table_cell) => todo!(),
-            // FIX: Lists
-            mdast::Node::List(_list) => todo!(),
-            mdast::Node::ListItem(_list_item) => todo!(),
 
             _ => unreachable!("MDX is disabled"),
         }
