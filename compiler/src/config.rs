@@ -12,6 +12,10 @@ fn default_blog_base_path() -> PathBuf {
     PathBuf::from("blog/")
 }
 
+fn default_content_dir() -> String {
+    String::from("content/")
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Config {
@@ -19,6 +23,9 @@ pub struct Config {
     /// If you are linking to `/assets/image.png`, the compiler will resolve it to
     /// `https://nferhat.dev/assets/image.png`
     pub base_url: String,
+    /// The content directory root.
+    #[serde(default = "default_content_dir")]
+    pub content_dir: String,
     /// Styling configuration.
     pub styling: StylingConfig,
     /// Configuration for the blog system.

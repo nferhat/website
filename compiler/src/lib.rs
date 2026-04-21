@@ -15,26 +15,33 @@ mod style;
 mod templates;
 mod utils;
 
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{self, Path, PathBuf},
+    sync::Arc,
+};
+
+use eyre::{Context, bail, eyre};
+use markdown::mdast;
+use tokio::{fs, io};
+use utils::to_dot_relative;
 
 pub use config::{BlogConfig, Config, Error as ConfigError, StylingConfig};
-use eyre::{Context, bail, eyre};
 pub use generator::Generator;
-use markdown::mdast;
 pub use style::compile_to_stylesheet;
-use tokio::{fs, io};
 
 use templates::{Templates, context};
+
+use crate::utils::strip_leading_segment;
 
 /// The main compiler.
 pub struct Compiler {
     /// The root of the website. All paths inside the configuration and such will be
     /// relative to this path.
-    root: Arc<Path>,
+    root: PathBuf,
     // Pre-cache some paths here because we are going to use them a lot.
     #[allow(unused)]
-    build_path: Arc<Path>,
-    style_output_path: Arc<Path>,
+    build_path: PathBuf,
+    style_output_path: PathBuf,
 
     /// The templates for this website.
     templates: Templates,
@@ -48,11 +55,12 @@ pub struct Compiler {
 }
 
 impl Compiler {
-    pub fn new(root: impl Into<Arc<Path>>, config: &Arc<Config>) -> eyre::Result<Self> {
-        let root = root.into();
+    pub fn new(root: impl AsRef<Path>, config: &Arc<Config>) -> eyre::Result<Self> {
+        let root = path::absolute(root)?;
 
-        let build_path = root.join("dist").into_boxed_path();
-        let style_output_path = build_path.join("style.css").into_boxed_path();
+        let build_path = root.join("dist");
+        let style_output_path = build_path.join("style.css");
+
         let templates_dir = root.join("templates");
         let templates = futures::executor::block_on(Templates::new(&templates_dir))?;
 
@@ -65,8 +73,8 @@ impl Compiler {
 
         Ok(Self {
             root,
-            build_path: Arc::from(build_path),
-            style_output_path: Arc::from(style_output_path),
+            build_path,
+            style_output_path,
             templates,
             config,
             site_ctx,
@@ -85,8 +93,8 @@ impl Compiler {
     pub async fn compile_all(&mut self) -> eyre::Result<()> {
         self.recompile_stylesheets().await?;
 
-        let root = Arc::clone(&self.root);
-        self.recompile_pages(&root).await?;
+        // let root = Arc::clone(&self;
+        self.recompile_pages(self.root.clone()).await?;
 
         Ok(())
     }
@@ -107,12 +115,10 @@ impl Compiler {
                     stack.push(path);
                     continue 'entries;
                 } else {
-                    let Some(ext) = path.extension() else {
+                    let path_str = path.to_string_lossy();
+                    if !path_str.contains(&self.config.content_dir) {
+                        // We are only interested in content.
                         continue 'entries;
-                    };
-
-                    if ext != "md" && ext != "markdown" && ext != "mdown" {
-                        continue 'entries; // nope not interested
                     }
 
                     self.recompile_page(path).await?;
@@ -162,11 +168,9 @@ impl Compiler {
     /// It figures out the needed other pages that need to recompile in extra to this one,
     /// for example if you ask to recompile a blog page, the blogs index page will also update.
     pub async fn recompile_page(&mut self, input_path: impl AsRef<Path>) -> eyre::Result<()> {
-        let input_path = input_path.as_ref();
+        let input_path = to_dot_relative(input_path);
 
-        // FIXME: Figure out depends of this page.
-        // This is easier said than done, however.
-        let raw_content = fs::read_to_string(input_path).await?;
+        let raw_content = fs::read_to_string(&input_path).await?;
         let mut contents = markdown::to_mdast(&raw_content, &parse_options())
             .map_err(|msg| eyre!("failed to parse markdown: {msg}"))?;
 
@@ -187,10 +191,10 @@ impl Compiler {
         };
 
         let frontmatter = frontmatter::from_str(&frontmatter_str)?;
-        let path_relative = input_path.strip_prefix(&self.root).expect("root path");
-        let output_path = self.build_path.join(path_relative).with_extension("html");
+        let content_path = strip_leading_segment(&input_path, "content");
+        let output_path = self.build_path.join(&content_path).with_extension("html");
         // We can calculate the resulting URL from the output path.
-        let url = path_relative.with_extension("html");
+        let url = content_path.with_extension("html");
         let url = url.to_string_lossy();
 
         let filename = input_path.file_name().unwrap().to_string_lossy();
