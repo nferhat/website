@@ -8,11 +8,11 @@
 extern crate tracing;
 
 mod config;
-pub mod frontmatter;
+mod frontmatter;
 mod generator;
-pub mod generators;
-pub mod page;
+mod generators;
 mod style;
+mod templates;
 mod utils;
 
 use std::{
@@ -25,6 +25,8 @@ pub use generator::Generator;
 use markdown::mdast;
 pub use style::compile_to_stylesheet;
 use tokio::{fs, io};
+
+use templates::{Templates, context};
 
 /// A result type that can be generated when compiling a site.
 type Result<T = ()> = std::result::Result<T, Error>;
@@ -45,6 +47,8 @@ pub enum Error {
     MissingFrontmatter,
     #[error("Invalid frontmatter: {0}")]
     InvalidFrontmatter(#[from] toml::de::Error),
+    #[error("Liquid error")]
+    Liquid(#[from] liquid::Error),
 }
 
 /// The main compiler.
@@ -57,8 +61,15 @@ pub struct Compiler {
     build_path: Arc<Path>,
     style_output_path: Arc<Path>,
 
+    /// The templates for this website.
+    templates: Templates,
+
     /// Website configuration
     config: Arc<Config>,
+
+    /// The cached [`Site`](context::Site) context passed into the templates.
+    site_ctx: context::Site,
+    build_ctx: context::Build,
 }
 
 impl Compiler {
@@ -69,13 +80,29 @@ impl Compiler {
 
         let build_path = root.join("dist").into_boxed_path();
         let style_output_path = build_path.join("style.css").into_boxed_path();
+        let templates_dir = root.join("templates");
+        let templates = futures::executor::block_on(Templates::new(&templates_dir)).unwrap();
+
+        // Create and cache contexts here.
+        let config = Arc::clone(config);
+        let site_ctx = context::Site {
+            base_url: config.base_url.clone(),
+        };
+        let build_ctx = context::Build { dev: false };
 
         Self {
             root,
             build_path: Arc::from(build_path),
             style_output_path: Arc::from(style_output_path),
-            config: Arc::clone(config),
+            templates,
+            config,
+            site_ctx,
+            build_ctx,
         }
+    }
+
+    pub fn set_dev_mode(&mut self, dev_mode: bool) {
+        self.build_ctx.dev = dev_mode;
     }
 
     /// Do a full-pass compile.
@@ -166,9 +193,8 @@ impl Compiler {
 
         // FIXME: Figure out depends of this page.
         // This is easier said than done, however.
-        let name = input_path.file_name().unwrap();
         let raw_content = fs::read_to_string(input_path).await?;
-        let mut contents = markdown::to_mdast(&raw_content, &page::parse_options())
+        let mut contents = markdown::to_mdast(&raw_content, &parse_options())
             .map_err(|msg| Error::Markdown(msg.to_string()))?;
 
         // Get the frontmatter out.
@@ -186,20 +212,69 @@ impl Compiler {
         };
 
         let frontmatter = frontmatter::from_str(&frontmatter_str)?;
-
-        let page = page::SitePage {
-            name: name.to_string_lossy().to_string(),
-            path: input_path.to_owned(),
-            frontmatter,
-            contents,
-        };
-
         let path_relative = input_path.strip_prefix(&self.root).expect("root path");
         let output_path = self.build_path.join(path_relative).with_extension("html");
+        // We can calculate the resulting URL from the output path.
+        let url = path_relative.with_extension("html");
+        let url = url.to_string_lossy();
 
-        let html = Generator::new(page.contents).to_html()?;
-        fs::write(&output_path, html).await?;
+        let filename = input_path.file_name().unwrap().to_string_lossy();
+        let slug = {
+            let slug = input_path.file_stem().unwrap();
+            slug.to_string_lossy()
+        };
+
+        let body = Generator::new(contents).to_html()?;
+
+        // FIXME: figure out which templates to use
+        let template = self.templates.index_template();
+        let context = context::Context {
+            page: context::Page {
+                contents: &body,
+                filename: &*filename,
+                title: &frontmatter.title,
+                slug: &*slug,
+                url: &*url,
+                tags: frontmatter.tags.clone(),
+            },
+            site: &self.site_ctx,
+            build: &self.build_ctx,
+        };
+
+        let context = liquid::to_object(&context)?;
+        let content = template.render(&context)?;
+
+        fs::write(&output_path, content).await?;
 
         Ok(())
+    }
+
+    /// Reloads a given template path.
+    pub async fn reload_template(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        self.templates.reload(path).await?;
+        // FIXME: Figure out which pages need to change
+        Ok(())
+    }
+}
+
+/// Options used to do the parsing of the config.
+///
+/// It's GFM+some additional stuff enabled.
+fn parse_options() -> markdown::ParseOptions {
+    markdown::ParseOptions {
+        constructs: markdown::Constructs {
+            autolink: true,
+            code_text: true,
+            gfm_autolink_literal: true,
+            html_flow: true,
+            label_start_image: true,
+            math_flow: true,
+            block_quote: true,
+            frontmatter: true,
+            math_text: true,
+            ..markdown::Constructs::gfm()
+        },
+        ..Default::default()
     }
 }

@@ -6,7 +6,7 @@
 // TODO: Table of contents(TOC)
 
 use fmt::Write;
-use std::fmt;
+use std::{collections::HashMap, fmt};
 use url::Url;
 
 use markdown::{

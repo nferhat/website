@@ -27,6 +27,8 @@ use tower_http::trace::TraceLayer;
 pub async fn run(root: PathBuf, config: Config, port: u16) -> anyhow::Result<()> {
     let config = Arc::new(config);
     let mut compiler = Compiler::new(root.clone().into_boxed_path(), &config);
+    // Hot-reloading and whatnot
+    compiler.set_dev_mode(true);
     // First do a full-pass compilation
     compiler.compile_all().await?;
 
@@ -136,6 +138,27 @@ async fn watch_for_changes(
                         warn!(?err, "Failed to rebuild page");
                         continue;
                     }
+                }
+            } else {
+                if path.to_string_lossy().contains("templates") {
+                    // FIXME: Incremental recompilation for single pages
+                    match compiler.reload_template(&path).await {
+                        Ok(_) => info!(?path, "Reloaded template"),
+                        Err(err) => {
+                            warn!(?err, "Failed to reload templates");
+                            continue;
+                        }
+                    }
+
+                    match compiler.compile_all().await {
+                        Ok(_) => info!(?path, "Recompiled with new template"),
+                        Err(err) => {
+                            warn!(?err, "Failed to recompile with new template");
+                            continue;
+                        }
+                    }
+
+                    reload_sender.send(()).ok();
                 }
             }
         }
