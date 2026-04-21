@@ -164,11 +164,12 @@ impl Compiler {
         // and also what the user wants us to import
         let mut load_paths = self.config.styling.load_paths.clone();
         load_paths.push(import_path);
+        let syntax = self.config.styling.syntax;
 
         // asyncify the compiling process, since it might read from other files on the filesystem and such
         // I don't know if this even helps but who am I to talk
         let style_res = tokio::task::spawn_blocking(move || {
-            style::compile_to_stylesheet(&sass_input, &load_paths)
+            style::compile_to_stylesheet(&sass_input, &load_paths, syntax)
         });
 
         let style_contents = match style_res.await {

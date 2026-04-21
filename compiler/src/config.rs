@@ -41,7 +41,7 @@ pub struct StylingConfig {
     /// We use SASS for styling. It's not an option. You can slap some style.css inside the dist/
     /// folder if you want. This parameter controls you want SCSS or SASS (See the different on
     /// https://sass-lang.com)
-    pub use_sass: Option<bool>,
+    pub syntax: StyleSyntax,
     /// The root file of your styling.
     ///
     /// By default, it also adds the directory containing this file into the sass load-paths.
@@ -52,6 +52,15 @@ pub struct StylingConfig {
     /// This is needed if you have some SASS libraries shipped on npm
     /// (I mean you shouldn't use them for something this simple but I digress)
     pub load_paths: Vec<PathBuf>,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StyleSyntax {
+    Css,
+    Scss,
+    #[default]
+    Sass,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
