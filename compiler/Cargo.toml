@@ -32,3 +32,4 @@ futures.workspace = true
 
 # Templating engine.
 liquid = { version = "0.26.11", features = ["liquid-lib"] }
+eyre = "0.6.12"

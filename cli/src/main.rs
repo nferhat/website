@@ -1,8 +1,8 @@
-use std::{env, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
-use anyhow::{Context, bail};
 use clap::Parser;
 use compiler::Compiler;
+use eyre::{Context as _, ContextCompat as _};
 use tokio::runtime;
 
 #[macro_use]
@@ -31,8 +31,9 @@ pub enum Command {
     },
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> eyre::Result<()> {
     setup_logger();
+    color_eyre::install().unwrap();
 
     let cli = Cli::parse();
     // Determine where the root of the website is.
@@ -40,23 +41,22 @@ fn main() -> anyhow::Result<()> {
         config_path.parent().context("no parent")?.to_owned()
     } else {
         // Try to use pwd if it contains a website.toml
-        let cwd = env::current_dir().context("failed to get cwd")?;
-        if cwd.join("website.toml").exists() {
-            cwd.to_owned()
+        if PathBuf::from("./website.toml").exists() {
+            PathBuf::from("./")
         } else {
-            bail!("Unable to find website root, make sure there's a website.toml file!");
+            eyre::bail!("Unable to find website root, make sure there's a website.toml file!");
         }
     };
 
     let build_dir = root.join("dist");
     _ = std::fs::remove_dir_all(&build_dir);
     if let Err(err) = std::fs::create_dir_all(&build_dir) {
-        bail!("Failed to create output directory: {err:?}")
+        eyre::bail!("Failed to create output directory: {err:?}")
     }
 
+    let config = compiler::Config::load(root.join("website.toml"))?;
     info!(?root, ?build_dir, "Found website");
 
-    let config = compiler::Config::load(root.join("website.toml"))?;
     let rt = runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -65,7 +65,8 @@ fn main() -> anyhow::Result<()> {
         match cli.command {
             Command::Build => {
                 let config = Arc::new(config);
-                let mut compiler = Compiler::new(root.clone().into_boxed_path(), &config);
+                let mut compiler = Compiler::new(root.clone().into_boxed_path(), &config)
+                    .context("failed to init compiler")?;
                 compiler.compile_all().await?;
                 Ok(())
             }

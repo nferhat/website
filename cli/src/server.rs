@@ -15,6 +15,7 @@ use axum::response::sse::Event as SseEvent;
 use axum::response::{IntoResponse, Sse};
 use axum::{Router, http};
 use compiler::{Compiler, Config};
+use eyre::Context as _;
 use futures::StreamExt;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use tokio::runtime;
@@ -24,13 +25,17 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
-pub async fn run(root: PathBuf, config: Config, port: u16) -> anyhow::Result<()> {
+pub async fn run(root: PathBuf, config: Config, port: u16) -> eyre::Result<()> {
     let config = Arc::new(config);
-    let mut compiler = Compiler::new(root.clone().into_boxed_path(), &config);
+    let mut compiler = Compiler::new(root.clone().into_boxed_path(), &config)
+        .context("failed to init compiler")?;
     // Hot-reloading and whatnot
     compiler.set_dev_mode(true);
     // First do a full-pass compilation
-    compiler.compile_all().await?;
+    compiler
+        .compile_all()
+        .await
+        .context("failed to run initial build")?;
 
     let (reload_sender, _) = broadcast::channel::<()>(32);
     let build_dir = root.join("dist");
@@ -115,7 +120,7 @@ async fn watch_for_changes(
 
         for path in event.paths {
             if is_style(&path) {
-                debug!(?path, "Triggering stylesheets rebuild due to path change");
+                trace!(?path, "Triggering stylesheets rebuild due to path change");
                 match compiler.recompile_stylesheets().await {
                     Ok(()) => {
                         reload_sender.send(()).ok();
@@ -127,7 +132,7 @@ async fn watch_for_changes(
                     }
                 }
             } else if is_markdown(&path) {
-                debug!(?path, "Triggering page rebuild due to path change");
+                trace!(?path, "Triggering page rebuild due to path change");
 
                 match compiler.recompile_page(&path).await {
                     Ok(()) => {
@@ -141,6 +146,7 @@ async fn watch_for_changes(
                 }
             } else {
                 if path.to_string_lossy().contains("templates") {
+                    trace!(?path, "Reloading website templates");
                     // FIXME: Incremental recompilation for single pages
                     match compiler.reload_template(&path).await {
                         Ok(_) => info!(?path, "Reloaded template"),
@@ -183,7 +189,7 @@ fn is_markdown(p: &Path) -> bool {
     ext == "md" || ext == "markdown" || ext == "mdown"
 }
 
-async fn serve(tx: broadcast::Sender<()>, path: &Path, port: u16) -> anyhow::Result<()> {
+async fn serve(tx: broadcast::Sender<()>, path: &Path, port: u16) -> eyre::Result<()> {
     // Disable caching in the browser.
     let disable_caching_layer = SetResponseHeaderLayer::overriding(
         CACHE_CONTROL,
@@ -201,7 +207,7 @@ async fn serve(tx: broadcast::Sender<()>, path: &Path, port: u16) -> anyhow::Res
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    debug!("listening on {}", listener.local_addr().unwrap());
+    info!("dev server started on {}", listener.local_addr().unwrap());
     axum::serve(listener, app.layer(TraceLayer::new_for_http())).await?;
     Ok(())
 }

@@ -15,41 +15,16 @@ mod style;
 mod templates;
 mod utils;
 
-use std::{
-    path::{self, Path},
-    sync::Arc,
-};
+use std::{path::Path, sync::Arc};
 
 pub use config::{BlogConfig, Config, Error as ConfigError, StylingConfig};
+use eyre::{Context, bail, eyre};
 pub use generator::Generator;
 use markdown::mdast;
 pub use style::compile_to_stylesheet;
 use tokio::{fs, io};
 
 use templates::{Templates, context};
-
-/// A result type that can be generated when compiling a site.
-type Result<T = ()> = std::result::Result<T, Error>;
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Formatting error: {0}")]
-    Format(#[from] std::fmt::Error),
-    #[error("Config error: {0}")]
-    Config(#[from] config::Error),
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Sass error: {0}")]
-    Sass(#[from] Box<grass::Error>),
-    #[error("Markdown error: {0}")]
-    Markdown(String),
-    #[error("Missing frontmatter")]
-    MissingFrontmatter,
-    #[error("Invalid frontmatter: {0}")]
-    InvalidFrontmatter(#[from] toml::de::Error),
-    #[error("Liquid error")]
-    Liquid(#[from] liquid::Error),
-}
 
 /// The main compiler.
 pub struct Compiler {
@@ -73,15 +48,13 @@ pub struct Compiler {
 }
 
 impl Compiler {
-    pub fn new(root: impl Into<Arc<Path>>, config: &Arc<Config>) -> Self {
+    pub fn new(root: impl Into<Arc<Path>>, config: &Arc<Config>) -> eyre::Result<Self> {
         let root = root.into();
-        let root = path::absolute(root).unwrap();
-        let root = Arc::<Path>::from(root.into_boxed_path());
 
         let build_path = root.join("dist").into_boxed_path();
         let style_output_path = build_path.join("style.css").into_boxed_path();
         let templates_dir = root.join("templates");
-        let templates = futures::executor::block_on(Templates::new(&templates_dir)).unwrap();
+        let templates = futures::executor::block_on(Templates::new(&templates_dir))?;
 
         // Create and cache contexts here.
         let config = Arc::clone(config);
@@ -90,7 +63,7 @@ impl Compiler {
         };
         let build_ctx = context::Build { dev: false };
 
-        Self {
+        Ok(Self {
             root,
             build_path: Arc::from(build_path),
             style_output_path: Arc::from(style_output_path),
@@ -98,7 +71,7 @@ impl Compiler {
             config,
             site_ctx,
             build_ctx,
-        }
+        })
     }
 
     pub fn set_dev_mode(&mut self, dev_mode: bool) {
@@ -109,7 +82,7 @@ impl Compiler {
     ///
     /// This goes over all the pages of the website and generates everything. This also cleans up
     /// any cached page from incremental compilation.
-    pub async fn compile_all(&mut self) -> Result<()> {
+    pub async fn compile_all(&mut self) -> eyre::Result<()> {
         self.recompile_stylesheets().await?;
 
         let root = Arc::clone(&self.root);
@@ -118,12 +91,14 @@ impl Compiler {
         Ok(())
     }
 
-    async fn recompile_pages(&mut self, dir: impl AsRef<Path>) -> Result<()> {
+    async fn recompile_pages(&mut self, dir: impl AsRef<Path>) -> eyre::Result<()> {
         let mut stack = Vec::with_capacity(10);
         stack.push(dir.as_ref().to_owned());
 
         while let Some(dir) = stack.pop() {
-            let mut read_dir = fs::read_dir(dir).await?;
+            let mut read_dir = fs::read_dir(dir)
+                .await
+                .context("failed to read directory")?;
             'entries: while let Some(entry) = read_dir.next_entry().await? {
                 let path = entry.path();
 
@@ -154,7 +129,7 @@ impl Compiler {
     /// to a 3rd-party library [`grass`], we cannot reliably do finer incremental compilation of styles.
     ///
     /// Plus, CSS composes over multiple files, sooooo...
-    pub async fn recompile_stylesheets(&mut self) -> Result<()> {
+    pub async fn recompile_stylesheets(&mut self) -> eyre::Result<()> {
         let style_input = self.root.join(&self.config.styling.root_file);
         // include the file's parent directory in the import paths
         let import_path = style_input.parent().map(ToOwned::to_owned).ok_or_else(|| {
@@ -173,11 +148,8 @@ impl Compiler {
         });
 
         let style_contents = match style_res.await {
-            Ok(res) => res.map_err(Error::Sass),
-            Err(_) => Err(Error::Io(io::Error::new(
-                io::ErrorKind::Other,
-                "background task failed",
-            ))),
+            Ok(res) => res.context("sass compilation error"),
+            Err(_) => eyre::bail!("background task failed"),
         }?;
 
         fs::write(&self.style_output_path, style_contents).await?;
@@ -189,19 +161,21 @@ impl Compiler {
     ///
     /// It figures out the needed other pages that need to recompile in extra to this one,
     /// for example if you ask to recompile a blog page, the blogs index page will also update.
-    pub async fn recompile_page(&mut self, input_path: impl AsRef<Path>) -> Result<()> {
+    pub async fn recompile_page(&mut self, input_path: impl AsRef<Path>) -> eyre::Result<()> {
         let input_path = input_path.as_ref();
 
         // FIXME: Figure out depends of this page.
         // This is easier said than done, however.
         let raw_content = fs::read_to_string(input_path).await?;
         let mut contents = markdown::to_mdast(&raw_content, &parse_options())
-            .map_err(|msg| Error::Markdown(msg.to_string()))?;
+            .map_err(|msg| eyre!("failed to parse markdown: {msg}"))?;
 
         // Get the frontmatter out.
-        let children = contents.children_mut().ok_or(Error::MissingFrontmatter)?;
+        let children = contents
+            .children_mut()
+            .ok_or_else(|| eyre!("missing frontmatter"))?;
         if children.len() < 1 {
-            return Err(Error::MissingFrontmatter);
+            bail!("missing frontmatter")
         }
         let frontmatter_node = children.remove(0);
         let mdast::Node::Toml(mdast::Toml {
@@ -209,7 +183,7 @@ impl Compiler {
             ..
         }) = frontmatter_node
         else {
-            return Err(Error::MissingFrontmatter);
+            bail!("invalid frontmatter format, we use TOML for frontmatter")
         };
 
         let frontmatter = frontmatter::from_str(&frontmatter_str)?;
@@ -244,6 +218,13 @@ impl Compiler {
 
         let context = liquid::to_object(&context)?;
         let content = template.render(&context)?;
+        trace!(?output_path, "Writing HTML");
+        if let Some(parent) = output_path.parent() {
+            trace!(?output_path, "Creating parent directory");
+            fs::create_dir_all(parent)
+                .await
+                .context("failed to create parent directory")?;
+        }
 
         fs::write(&output_path, content).await?;
 
@@ -251,7 +232,7 @@ impl Compiler {
     }
 
     /// Reloads a given template path.
-    pub async fn reload_template(&mut self, path: impl AsRef<Path>) -> Result<()> {
+    pub async fn reload_template(&mut self, path: impl AsRef<Path>) -> eyre::Result<()> {
         let path = path.as_ref();
         self.templates.reload(path).await?;
         // FIXME: Figure out which pages need to change

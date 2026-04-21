@@ -8,7 +8,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 compiler.path = "../compiler"
 clap = { version = "4.6.0", features = ["derive"] }
-anyhow = "1.0.102"
 serde.workspace = true
 toml.workspace = true
 markdown.workspace = true
@@ -18,3 +17,5 @@ tokio.workspace = true
 futures.workspace = true
 notify = "8.2.0"
 tokio-stream = { version = "0.1.18", features = ["sync"] }
+eyre = "0.6"
+color-eyre = "0.6.5"

@@ -1,5 +1,6 @@
 use std::{path::Path, sync::Arc};
 
+use eyre::Result;
 use tokio::fs;
 
 pub mod context;
@@ -15,7 +16,7 @@ impl Templates {
     ///
     /// This handles proper creation of the [`liquid::Parser`] used to create and manage the templates,
     /// and loads the index template.
-    pub async fn new(templates_dir: impl AsRef<Path>) -> crate::Result<Self> {
+    pub async fn new(templates_dir: impl AsRef<Path>) -> Result<Self> {
         let dir = templates_dir.as_ref();
 
         // We create the parser that's gonna create all the liquid::Templates
@@ -32,7 +33,7 @@ impl Templates {
     }
 
     /// Reloads a given template.
-    pub async fn reload(&mut self, path: impl AsRef<Path>) -> crate::Result<()> {
+    pub async fn reload(&mut self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
 
         // FIXME: Should absolute paths to templates resolve?
@@ -62,7 +63,7 @@ impl Templates {
     async fn load_template_internal(
         path: &Path,
         parser: &liquid::Parser,
-    ) -> crate::Result<liquid::Template> {
+    ) -> Result<liquid::Template> {
         let template_text = fs::read_to_string(&path).await?;
         let template = parser.parse(&template_text)?;
         Ok(template)

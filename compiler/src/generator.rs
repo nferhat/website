@@ -9,12 +9,13 @@ use fmt::Write;
 use std::{collections::HashMap, fmt};
 use url::Url;
 
+use eyre::Result;
 use markdown::{
     mdast::{self, Node},
     unist::Position,
 };
 
-use crate::{Result, generators::codeblock};
+use crate::generators::codeblock;
 
 pub struct Generator {
     root_node: Node,
@@ -108,7 +109,7 @@ impl Generator {
         node: mdast::Node,
         position: Position,
         out: &mut impl Write,
-    ) -> Result {
+    ) -> Result<()> {
         match node {
             mdast::Node::Blockquote(blockquote) => {
                 self.generate_node_with_children(
@@ -227,7 +228,7 @@ impl Generator {
         heading: mdast::Heading,
         position: Position,
         out: &mut impl Write,
-    ) -> Result {
+    ) -> Result<()> {
         trace!(?position, level = heading.depth, "Got heading");
 
         // NOTE: Here we limit what we can render inside a heading, otherwise other pieces of
@@ -247,7 +248,7 @@ impl Generator {
         inline_code: mdast::InlineCode,
         position: Position,
         out: &mut impl Write,
-    ) -> Result {
+    ) -> Result<()> {
         trace!(?position, "Got inline code");
         write!(out, "<code class=inline-code>{}</code>", inline_code.value)?;
         Ok(())
@@ -258,7 +259,7 @@ impl Generator {
         delete: mdast::Delete,
         position: Position,
         out: &mut impl Write,
-    ) -> Result {
+    ) -> Result<()> {
         trace!(?position, "Got strikethrough/delete");
         self.generate_node_with_children("span", &["strikethrough"], delete.children, out)
     }
@@ -268,7 +269,7 @@ impl Generator {
         code: mdast::Code,
         position: Position,
         out: &mut impl Write,
-    ) -> Result {
+    ) -> Result<()> {
         let res = codeblock::generate(position, &code)?;
         write!(out, "{res}")?;
         Ok(())
@@ -279,7 +280,7 @@ impl Generator {
         link: mdast::Link,
         position: Position,
         out: &mut impl Write,
-    ) -> Result {
+    ) -> Result<()> {
         trace!(?position, "Got link");
 
         write!(out, "<a ")?;
@@ -317,7 +318,7 @@ impl Generator {
         image: mdast::Image,
         position: Position,
         out: &mut impl Write,
-    ) -> Result {
+    ) -> Result<()> {
         trace!(?position, "Got image");
 
         // Additional div to make a cool popout effect using css
@@ -359,7 +360,7 @@ impl Generator {
         classes: &[&str],
         children: impl IntoIterator<Item = mdast::Node>,
         out: &mut impl Write,
-    ) -> Result {
+    ) -> Result<()> {
         write!(out, "<{tag_name} ")?;
         if classes.len() != 0 {
             write!(out, "class=\"")?;
