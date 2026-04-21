@@ -18,6 +18,8 @@ use crate::{Result, generators::codeblock};
 
 pub struct Generator {
     root_node: Node,
+    /// Link references inside this page.
+    pub link_refs: HashMap<String, String>,
     /// Whether this sitepage has math.
     ///
     /// If `true`, we need to include a special math script from [MathJax](https://mathjax.org)
@@ -33,6 +35,7 @@ impl Generator {
     pub fn new(root_node: Node) -> Self {
         Self {
             root_node,
+            link_refs: HashMap::new(),
             has_math: false,
         }
     }
@@ -46,6 +49,18 @@ impl Generator {
         // NOTE: Before there was a "pre-pass" here in order to ensure correct links and whatnot.
         // But it turns out the [`markdown`] crate already handles this for us and doesn't give us
         // references/footnotes to stuff that doesn't exist, and instead just emits Text nodes.
+        //
+        // We still need to cache link refs.
+        for node in &root.children {
+            if let mdast::Node::Definition(def) = node {
+                let old = self
+                    .link_refs
+                    .insert(def.identifier.clone(), def.url.clone());
+                if old.is_some() {
+                    warn!("Link definition overriden")
+                }
+            }
+        }
 
         // We first need to generate the HTML for the children since we need to determine whether
         // the content has math in order to only include mathjax when needed.
@@ -273,22 +288,18 @@ impl Generator {
         }
 
         // Now, depending on whether the given link is an url or not, we try to find the reference.
-        if Url::parse(&link.url).is_ok() {
-            write!(out, "href=\"{}\"", link.url)?;
-        } else {
+        let url = if Url::parse(&link.url).is_ok() {
+            &link.url
+        } else if let Some(url) = self.link_refs.get(&link.url) {
             // Otherwise, try to search for existing references.
             // We are assured that all the link definitions of the document are here since we do a prepass.
+            url
+        } else {
+            // Or just put the "link", we are not smarter than the user.
+            &link.url
+        };
 
-            // if let Some(url) = self.link_defs.get(&link.url) {
-            //     write!(out, "href=\"{}\"", url)?;
-            // } else {
-            //     self.invalid_links.insert(link.url.clone());
-            // };
-
-            // FIX: I simplified the generator here
-        }
-
-        write!(out, ">")?;
+        write!(out, "href=\"{}\">", url)?;
 
         for child in link.children {
             let position = child.position().unwrap().clone();
@@ -320,22 +331,18 @@ impl Generator {
         }
 
         // Now, depending on whether the given link is an url or not, we try to find the reference.
-        if Url::parse(&image.url).is_ok() {
-            write!(out, "src=\"{}\"", image.url)?;
+        let url = if Url::parse(&image.url).is_ok() {
+            &image.url
+        } else if let Some(url) = self.link_refs.get(&image.url) {
+            // Otherwise, try to search for existing references.
+            // We are assured that all the link definitions of the document are here since we do a prepass.
+            url
         } else {
-            // Otherwise, try to search for existing references. The same as link references.
-            // This allow for flexibility in case the user wants (or not) to show the image as content
-            // or just link to it.
+            // Or just put the "link", we are not smarter than the user.
+            &image.url
+        };
 
-            // if let Some(url) = self.link_defs.get(&image.url) {
-            //     write!(out, "src=\"{}\"", url)?;
-            // } else {
-            //     self.invalid_links.insert(image.url.clone());
-            // };
-
-            // FIX: I simplified things here
-        }
-        write!(out, ">")?;
+        write!(out, "src=\"{}\">", url)?;
 
         if let Some(title) = &image.title {
             write!(out, r#"<span class=image-title>{}</span>"#, title)?;
