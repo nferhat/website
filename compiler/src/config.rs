@@ -8,8 +8,8 @@ fn default_root_file() -> PathBuf {
     PathBuf::from("style/style.sass")
 }
 
-fn default_blog_base_path() -> PathBuf {
-    PathBuf::from("blog/")
+fn default_blog_base_path() -> String {
+    String::from("blog/")
 }
 
 fn default_content_dir() -> String {
@@ -81,7 +81,7 @@ pub struct BlogConfig {
     /// inside `dist/articles/*.html`, with `dist/articles/index.html` being the "all articles"
     /// page
     #[serde(default = "default_blog_base_path")]
-    pub base_path: PathBuf,
+    pub base_path: String,
     /// Whether to include drafts into the "All blogs" page. Drafts are always accessible
     /// (using their absolute path), however they are skipped from the listing, search, tag
     /// search, etc.
