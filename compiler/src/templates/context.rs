@@ -54,6 +54,8 @@ pub struct PageMeta {
 #[derive(Serialize)]
 pub struct Context<'ctx> {
     pub page: Page<'ctx>,
+    /// All the pages of this blog, including excluding the current one.
+    pub pages: Vec<Page<'ctx>>,
     pub site: &'ctx Site,
     pub build: &'ctx Build,
 }

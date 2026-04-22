@@ -15,7 +15,7 @@ mod templates;
 mod utils;
 
 use std::{
-    collections::{HashMap, hash_map},
+    collections::HashMap,
     path::{self, Path, PathBuf},
     sync::Arc,
 };
@@ -232,45 +232,28 @@ impl Compiler {
         let word_count = 1000; // WIP:
         let reading_time = ((word_count as f64 / WPM) * 60.0).round() as usize;
 
-        let blog_page = match self.page_cache.entry(content_path_str.clone()) {
-            hash_map::Entry::Occupied(mut occupied_entry) => {
-                *occupied_entry.get_mut() = SitePage {
-                    // NOTE: It is even worth it to cache the body here?
-                    contents: body.clone(),
-                    filename: filename.to_string(),
-                    slug: slug.to_string(),
-                    url: url.to_string(),
-                    tags: frontmatter.tags.clone(),
-                    title: frontmatter.title.clone(),
-                    draft: frontmatter.draft,
-                    meta: context::PageMeta {
-                        reading_time,
-                        word_count,
-                    },
-                };
-                &*occupied_entry.into_mut()
-            }
-            hash_map::Entry::Vacant(vacant_entry) => {
-                let blog_page = SitePage {
-                    // NOTE: It is even worth it to cache the body here?
-                    contents: body.clone(),
-                    filename: filename.to_string(),
-                    slug: slug.to_string(),
-                    url: url.to_string(),
-                    tags: frontmatter.tags.clone(),
-                    title: frontmatter.title.clone(),
-                    draft: frontmatter.draft,
-                    meta: context::PageMeta {
-                        reading_time,
-                        word_count,
-                    },
-                };
-                &*vacant_entry.insert(blog_page)
-            }
+        // Remove the previous one. the {{pages}} variable should have all pages but the current one.
+        _ = self.page_cache.remove(&content_path_str);
+
+        let page = SitePage {
+            // NOTE: It is even worth it to cache the body here?
+            contents: body.clone(),
+            filename: filename.to_string(),
+            slug: slug.to_string(),
+            url: url.to_string(),
+            tags: frontmatter.tags.clone(),
+            title: frontmatter.title.clone(),
+            draft: frontmatter.draft,
+            meta: context::PageMeta {
+                reading_time,
+                word_count,
+            },
         };
+        let pages = self.page_cache.values().map(Into::into).collect();
 
         let context = context::Context {
-            page: (blog_page).into(),
+            page: (&page).into(),
+            pages,
             site: &self.site_ctx,
             build: &self.build_ctx,
         };
@@ -295,6 +278,9 @@ impl Compiler {
                 .await
                 .context("failed to create parent directory")?;
         }
+
+        // Don't forget to update the cache!
+        _ = self.page_cache.insert(content_path_str, page);
 
         fs::write(&output_path, content).await?;
 
