@@ -15,6 +15,7 @@ mod templates;
 mod utils;
 
 use std::{
+    collections::{HashMap, hash_map},
     path::{self, Path, PathBuf},
     sync::Arc,
 };
@@ -37,6 +38,8 @@ pub struct Compiler {
     /// The root of the website. All paths inside the configuration and such will be
     /// relative to this path.
     root: PathBuf,
+    /// Website configuration
+    config: Arc<Config>,
     // Pre-cache some paths here because we are going to use them a lot.
     #[allow(unused)]
     build_path: PathBuf,
@@ -45,23 +48,32 @@ pub struct Compiler {
     /// The templates for this website.
     templates: Templates,
 
-    /// Website configuration
-    config: Arc<Config>,
+    /// The cached pages of this site.
+    ///
+    /// Pages are cached by their original file name, stripped of the content prefix, of course.
+    ///
+    /// For example, the page generated from `./content/blog/i-love-oranges.md` would be cached under
+    /// the key `blog/i-love-oranges.md`.
+    ///
+    /// [`&BlogPage`](context::BlogPage) can easily be transformed into a [`Page`](context::Page),
+    /// so it can be passed into the templating engine quickly.
+    page_cache: HashMap<String, SitePage>,
 
     /// The cached [`Site`](context::Site) context passed into the templates.
     site_ctx: context::Site,
+    /// The cached [`Build`](context::Build) context passed into the templates.
     build_ctx: context::Build,
 }
 
 impl Compiler {
-    pub fn new(root: impl AsRef<Path>, config: &Arc<Config>) -> eyre::Result<Self> {
+    pub async fn new(root: impl AsRef<Path>, config: &Arc<Config>) -> eyre::Result<Self> {
         let root = path::absolute(root)?;
 
         let build_path = root.join("dist");
         let style_output_path = build_path.join("style.css");
 
         let templates_dir = root.join("templates");
-        let templates = futures::executor::block_on(Templates::new(&templates_dir))?;
+        let templates = Templates::new(&templates_dir).await?;
 
         // Create and cache contexts here.
         let config = Arc::clone(config);
@@ -70,7 +82,7 @@ impl Compiler {
         };
         let build_ctx = context::Build { dev: false };
 
-        Ok(Self {
+        let mut this = Self {
             root,
             build_path,
             style_output_path,
@@ -78,7 +90,15 @@ impl Compiler {
             config,
             site_ctx,
             build_ctx,
-        })
+            page_cache: HashMap::new(),
+        };
+
+        // Run a first compile pass in order to populate the page cache.
+        this.compile_all()
+            .await
+            .context("failed to run initial compilation")?;
+
+        Ok(this)
     }
 
     pub fn set_dev_mode(&mut self, dev_mode: bool) {
@@ -185,40 +205,7 @@ impl Compiler {
         let mut parser = pulldown_cmark::Parser::new_ext(&file_contents, options);
 
         // First extract the frontmatter from the parser
-        let frontmatter = {
-            let first_event = parser.next().ok_or_else(|| eyre!("missing frontmatter"))?;
-
-            let Event::Start(Tag::MetadataBlock(MetadataBlockKind::PlusesStyle)) = first_event
-            else {
-                bail!("invalid frontmatter node")
-            };
-
-            // Collect all text content until we hit the End tag
-            let mut frontmatter_content = String::new();
-
-            loop {
-                // FIXME: We can potentially get stuck in this loop? The parser should not give us a begin block without
-                // an end block anyway.
-                let Some(event) = parser.next() else {
-                    break;
-                };
-
-                match event {
-                    // No more frontmatter
-                    Event::End(TagEnd::MetadataBlock(MetadataBlockKind::PlusesStyle)) => break,
-                    // Otherwise keep accumulating the text in the string
-                    Event::Text(text) => frontmatter_content.push_str(&text),
-                    Event::SoftBreak | Event::HardBreak => {
-                        frontmatter_content.push('\n');
-                    }
-                    _ => unreachable!("inside frontmatter"),
-                }
-            }
-
-            let frontmatter = frontmatter::from_str(&frontmatter_content)
-                .context("failed to parse frontmatter")?;
-            frontmatter
-        };
+        let frontmatter = get_frontmatter(&mut parser)?;
 
         let body = {
             let mut out = String::with_capacity(1024);
@@ -227,6 +214,8 @@ impl Compiler {
         };
 
         let content_path = strip_leading_segment(&input_path, "content");
+        // FIXME: to_string_lossy may create duplicate keys in the `page_cache`
+        let content_path_str = content_path.to_string_lossy().to_string();
         let output_path = self.build_path.join(&content_path).with_extension("html");
         // We can calculate the resulting URL from the output path.
         let url = content_path.with_extension("html");
@@ -243,23 +232,48 @@ impl Compiler {
         let word_count = 1000; // WIP:
         let reading_time = ((word_count as f64 / WPM) * 60.0).round() as usize;
 
+        let blog_page = match self.page_cache.entry(content_path_str.clone()) {
+            hash_map::Entry::Occupied(mut occupied_entry) => {
+                *occupied_entry.get_mut() = SitePage {
+                    // NOTE: It is even worth it to cache the body here?
+                    contents: body.clone(),
+                    filename: filename.to_string(),
+                    slug: slug.to_string(),
+                    url: url.to_string(),
+                    tags: frontmatter.tags.clone(),
+                    title: frontmatter.title.clone(),
+                    draft: frontmatter.draft,
+                    meta: context::PageMeta {
+                        reading_time,
+                        word_count,
+                    },
+                };
+                &*occupied_entry.into_mut()
+            }
+            hash_map::Entry::Vacant(vacant_entry) => {
+                let blog_page = SitePage {
+                    // NOTE: It is even worth it to cache the body here?
+                    contents: body.clone(),
+                    filename: filename.to_string(),
+                    slug: slug.to_string(),
+                    url: url.to_string(),
+                    tags: frontmatter.tags.clone(),
+                    title: frontmatter.title.clone(),
+                    draft: frontmatter.draft,
+                    meta: context::PageMeta {
+                        reading_time,
+                        word_count,
+                    },
+                };
+                &*vacant_entry.insert(blog_page)
+            }
+        };
+
         // FIXME: figure out which templates to use
         let template = self.templates.index_template();
 
         let context = context::Context {
-            page: context::Page {
-                contents: &body,
-                filename: &*filename,
-                title: &frontmatter.title,
-                slug: &*slug,
-                url: &*url,
-                tags: frontmatter.tags.clone(),
-                draft: frontmatter.draft,
-                meta: context::PageMeta {
-                    reading_time,
-                    word_count,
-                },
-            },
+            page: (blog_page).into(),
             site: &self.site_ctx,
             build: &self.build_ctx,
         };
@@ -286,4 +300,82 @@ impl Compiler {
         // FIXME: Figure out which pages need to change
         Ok(())
     }
+}
+
+/// A blog page.
+///
+/// This page is "owned", meaning it owns it's data. It's used for storing and caching pages around. It's cached in
+/// the [`Compiler`] in order to track which pages need to recompile, and also to be passed inside the templating engine
+/// [`context`] variables.
+pub struct SitePage {
+    /// The rendered contents of the page.
+    pub contents: String,
+    /// The original filename used for this page.
+    pub filename: String,
+    /// The filename of a Document resource without its extension (or date prefixes for a post).
+    /// For example, slug for a post at URL `/2017/02/22/my-new-post.html`, would be
+    /// `my-new-post`.
+    pub slug: String,
+    /// The URL of this page.
+    pub url: String,
+    /// The tags of this page. Set in the frontmatter.
+    // FIXME: Allocation here.
+    pub tags: Vec<String>,
+    /// The title of this page. Set in the frontmatter.
+    pub title: String,
+    /// Whether this page is still a draft.
+    pub draft: bool,
+    /// Meta information about this page.
+    pub meta: context::PageMeta,
+}
+
+impl<'ctx> Into<context::Page<'ctx>> for &'ctx SitePage {
+    fn into(self) -> context::Page<'ctx> {
+        context::Page {
+            contents: &self.contents,
+            filename: &self.filename,
+            slug: &self.slug,
+            url: &self.url,
+            tags: self.tags.clone(), // FIXME: Clone
+            title: &self.title,
+            draft: self.draft,
+            meta: self.meta,
+        }
+    }
+}
+
+fn get_frontmatter<'src>(
+    parser: &mut pulldown_cmark::Parser<'src>,
+) -> eyre::Result<frontmatter::Frontmatter> {
+    let first_event = parser.next().ok_or_else(|| eyre!("missing frontmatter"))?;
+
+    let Event::Start(Tag::MetadataBlock(MetadataBlockKind::PlusesStyle)) = first_event else {
+        bail!("invalid frontmatter node")
+    };
+
+    // Collect all text content until we hit the End tag
+    let mut frontmatter_content = String::new();
+
+    loop {
+        // FIXME: We can potentially get stuck in this loop? The parser should not give us a begin block without
+        // an end block anyway.
+        let Some(event) = parser.next() else {
+            break;
+        };
+
+        match event {
+            // No more frontmatter
+            Event::End(TagEnd::MetadataBlock(MetadataBlockKind::PlusesStyle)) => break,
+            // Otherwise keep accumulating the text in the string
+            Event::Text(text) => frontmatter_content.push_str(&text),
+            Event::SoftBreak | Event::HardBreak => {
+                frontmatter_content.push('\n');
+            }
+            _ => unreachable!("inside frontmatter"),
+        }
+    }
+
+    let frontmatter =
+        frontmatter::from_str(&frontmatter_content).context("failed to parse frontmatter")?;
+    Ok(frontmatter)
 }

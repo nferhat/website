@@ -43,7 +43,7 @@ pub struct Page<'ctx> {
     pub meta: PageMeta,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Copy)]
 pub struct PageMeta {
     /// The word count of this page.
     pub word_count: usize,

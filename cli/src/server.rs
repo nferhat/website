@@ -28,6 +28,7 @@ use tower_http::trace::TraceLayer;
 pub async fn run(root: PathBuf, config: Config, port: u16) -> eyre::Result<()> {
     let config = Arc::new(config);
     let mut compiler = Compiler::new(root.clone().into_boxed_path(), &config)
+        .await
         .context("failed to init compiler")?;
     // Hot-reloading and whatnot
     compiler.set_dev_mode(true);
