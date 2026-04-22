@@ -24,6 +24,7 @@ might not like those. Some of which include
 - No base website for you to build from
 - Forced use of [SASS](https://sass-lang.org) for styling
 - [GitHub-flavored markdown](gfm) over other markdown standards/formats.
+- [Liquid](liquid-engine) for templating
 
 ---
 
@@ -46,16 +47,17 @@ However, I still leave it open source for reference (for what the license allows
 
 ## TODO
 
-- [x] Basic rendering of markdown files 
-  - [ ] lists
-  - [ ] tables (I don't know how to style them yet)
-- [ ] Proper templating (perhaps through handlebars/askama?)
+- [x] Rendering of markdown files 
+- [x] Proper templating using Shopify's `liquid` engine
+  - See `compiler/src/templates/context.rs` for passed-in variables
+  - Supports `partials`! You can seamlessly use the `render` directive.
 - [ ] Codeblock highlighting using tree-sitter 
-- [ ] More cohesive website generator.
-   - For now we only have single-page generators. However, for some pages, we might need to get a
-   "run over all pages" state, for example a "All blogs" page, for example.
-- [ ] Incremental builds 
+- [x] More cohesive website generator.
+   - ~~For now we only have single-page generators. However, for some pages, we might need to get a
+   "run over all pages" state, for example a "All blogs" page, for example.~~
+- [] Incremental builds 
    - `cli serve` supports serving, but it's hot-reloading is kinda iffy, even though it only recompiles
    the page you modified, this might not be it for the long run. This kinda ties in with the previous point
 
 [gfm]: https://github.github.com/gfm/#what-is-github-flavored-markdown-
+[liquid-engine]: https://shopify.dev/docs/api/liquid/
