@@ -10,6 +10,7 @@ use tokio::fs;
 use crate::utils;
 
 pub mod context;
+mod partials;
 
 pub struct Templates {
     templates_dir: Arc<Path>,
@@ -27,12 +28,18 @@ impl Templates {
     /// and loads the index template.
     pub async fn new(templates_dir: impl AsRef<Path>) -> Result<Self> {
         let dir = templates_dir.as_ref();
+        let templates_dir = dir.to_path_buf().into_boxed_path();
+        let templates_dir = Arc::from(templates_dir);
+
+        let partials_source = partials::PartialLoader::new(Arc::clone(&templates_dir));
+        let partials = liquid::partials::LazyCompiler::new(partials_source);
 
         // We create the parser that's gonna create all the liquid::Templates
-        let parser = liquid::ParserBuilder::new().stdlib().build()?;
+        let parser = liquid::ParserBuilder::new()
+            .stdlib()
+            .partials(partials)
+            .build()?;
         let index = Self::load_template_internal(&dir.join("index.liquid"), &parser).await?;
-
-        let templates_dir = dir.to_path_buf().into_boxed_path();
 
         Ok(Self {
             templates_dir: templates_dir.into(),
