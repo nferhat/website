@@ -254,6 +254,7 @@ impl Compiler {
                 slug: &*slug,
                 url: &*url,
                 tags: frontmatter.tags.clone(),
+                draft: frontmatter.draft,
                 meta: context::PageMeta {
                     reading_time,
                     word_count,

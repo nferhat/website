@@ -13,7 +13,6 @@ const fn default_true() -> bool {
 /// +++
 /// title = "Hello world"
 /// tags = ["a", "b"]
-/// # draft = false
 /// +++
 /// ```
 ///
