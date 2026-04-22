@@ -60,7 +60,6 @@ async fn reload_sse(
     let rx = tx.subscribe();
 
     let stream = BroadcastStream::new(rx).filter_map(|msg| async move {
-        dbg!(&msg);
         match msg {
             Ok(_) => Some(Ok(SseEvent::default().data("reload"))),
             Err(_) => None,
