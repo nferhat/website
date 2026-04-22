@@ -305,7 +305,11 @@ impl Compiler {
     pub async fn reload_template(&mut self, path: impl AsRef<Path>) -> eyre::Result<()> {
         let path = path.as_ref();
         self.templates.reload(path).await?;
-        // FIXME: Figure out which pages need to change
+        // FIXME: Figure out what to recompile.
+        //
+        // Right now we recompile everything since we are doing partials, and figuring out which templates
+        // depend on who is currently nearly impossible since the templating engine acts as a "black box".
+        self.compile_all().await?;
         Ok(())
     }
 }

@@ -156,14 +156,6 @@ async fn watch_for_changes(
                         }
                     }
 
-                    match compiler.compile_all().await {
-                        Ok(_) => info!(?path, "Recompiled with new template"),
-                        Err(err) => {
-                            warn!(?err, "Failed to recompile with new template");
-                            continue;
-                        }
-                    }
-
                     reload_sender.send(()).ok();
                 }
             }
