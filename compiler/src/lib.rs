@@ -269,13 +269,21 @@ impl Compiler {
             }
         };
 
-        // FIXME: figure out which templates to use
-        let template = self.templates.index_template();
-
         let context = context::Context {
             page: (blog_page).into(),
             site: &self.site_ctx,
             build: &self.build_ctx,
+        };
+
+        let template = match &frontmatter.template {
+            Some(name) => {
+                if let Ok(requested) = self.templates.get_template(name).await {
+                    requested
+                } else {
+                    self.templates.index_template()
+                }
+            }
+            None => self.templates.index_template(),
         };
 
         let context = liquid::to_object(&context)?;

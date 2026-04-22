@@ -37,6 +37,8 @@ pub struct Frontmatter {
     /// Whether to include the little metadata line below the page title.
     #[serde(default)]
     pub metadata: bool,
+    /// The template used to rendering this page.
+    pub template: Option<String>,
 }
 
 pub fn from_str(s: &str) -> Result<Frontmatter, toml::de::Error> {
