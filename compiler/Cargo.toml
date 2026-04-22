@@ -9,20 +9,20 @@ edition.workspace = true
 serde.workspace = true
 toml.workspace = true
 
-# Creating errors
-thiserror.workspace = true
-
-# Logging
-tracing.workspace = true
-
-# Compiling markdown
-markdown.workspace = true
-codemap = "0.1.3"
-html-escape = "0.2.13"
-url = "2.5.8"
+# Compiling the markdown -> html
+pulldown-cmark = { version = "0.13.3", features = ["simd"] }
+pulldown-cmark-escape = { version = "0.11.0", features = ["simd"] }
 
 # Compiling styles
 grass = "0.13.4"
+
+# Creating errors
+thiserror.workspace = true
+eyre = "0.6.12"
+
+# Logging
+tracing.workspace = true
+codemap = "0.1.3"
 
 # Use tokio and futures to make integration with the CLI much nicer.
 # The server is based on axum, and it's async-first soo I'd rather not fight with
@@ -32,4 +32,3 @@ futures.workspace = true
 
 # Templating engine.
 liquid = { version = "0.26.11", features = ["liquid-lib"] }
-eyre = "0.6.12"

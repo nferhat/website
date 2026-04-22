@@ -3,40 +3,6 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use markdown::mdast::Node;
-
-/// Counts all the words inside of a given node. You should pass in the root node
-/// here to get all the words inside a document.
-#[allow(unused)]
-pub fn count_words(node: &Node) -> usize {
-    match node {
-        Node::Text(text) => count_words_in_text(&text.value),
-        Node::InlineCode(code) => count_words_in_text(&code.value),
-        Node::Root(n) => n.children.iter().map(count_words).sum(),
-        Node::Paragraph(n) => n.children.iter().map(count_words).sum(),
-        Node::Heading(n) => n.children.iter().map(count_words).sum(),
-        Node::Strong(n) => n.children.iter().map(count_words).sum(),
-        Node::Emphasis(n) => n.children.iter().map(count_words).sum(),
-        Node::Delete(n) => n.children.iter().map(count_words).sum(),
-        Node::Link(n) => n.children.iter().map(count_words).sum(),
-        Node::LinkReference(n) => n.children.iter().map(count_words).sum(),
-        Node::Blockquote(n) => n.children.iter().map(count_words).sum(),
-        Node::List(n) => n.children.iter().map(count_words).sum(),
-        Node::ListItem(n) => n.children.iter().map(count_words).sum(),
-        Node::Table(n) => n.children.iter().map(count_words).sum(),
-        Node::TableRow(n) => n.children.iter().map(count_words).sum(),
-        Node::TableCell(n) => n.children.iter().map(count_words).sum(),
-
-        // not including code blocks? I dont know if this is really correct but eh
-        _ => 0,
-    }
-}
-
-#[allow(unused)]
-fn count_words_in_text(s: &str) -> usize {
-    s.split_whitespace().count()
-}
-
 /// Converts a path into a `./`-prefixed path relative to the current working directory.
 ///
 /// Behavior:

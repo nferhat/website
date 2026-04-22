@@ -1,354 +1,518 @@
-//! A generator for a site content.
+//! HTML renderer that takes an iterator of events as input.
 //!
-//! This is strictly for the body/content, IE transforming markdown nodes into actual other nodes.
-//! This does not generate a full page.
+//! It is based on [`pulldown_cmark`]'s `HtmlWriter`, however with changes to accodomate for what I want
+//! and need in order to generate markdown for my website(s).
 
-// TODO: Table of contents(TOC)
+// TODO: implement highlighting of code blocks with tree-sitter.
+// TODO: Simplify this, I don't need all the generics and all, I just copied it straight from there.
 
-use fmt::Write;
-use std::{collections::HashMap, fmt};
-use url::Url;
+use std::collections::HashMap;
 
-use eyre::Result;
-use markdown::{
-    mdast::{self, Node},
-    unist::Position,
-};
+use pulldown_cmark::CowStr;
+use pulldown_cmark::Event::*;
+use pulldown_cmark::{Alignment, BlockQuoteKind, CodeBlockKind, Event, LinkType, Tag, TagEnd};
+use pulldown_cmark_escape::{FmtWriter, StrWrite, escape_href, escape_html, escape_html_body_text};
 
-use crate::generators::codeblock;
-
-pub struct Generator {
-    root_node: Node,
-    /// Link references inside this page.
-    pub link_refs: HashMap<String, String>,
-    /// Whether this sitepage has math.
-    ///
-    /// If `true`, we need to include a special math script from [MathJax](https://mathjax.org)
-    /// in order to properly handle/render math.
-    pub has_math: bool,
+enum TableState {
+    Head,
+    Body,
 }
 
-impl Generator {
-    /// Creates a new generator for a given [`SitePage`].
-    ///
-    /// The `stylesheet` parameter will be the URL/path from where the page will load it's stylesheet.
-    /// Essentially, it's the `href` parameter of a `<link rel="stylesheet"> tag.
-    pub fn new(root_node: Node) -> Self {
+struct HtmlWriter<'a, I, W> {
+    /// Iterator supplying events.
+    iter: I,
+    /// Writer to write to.
+    writer: W,
+
+    /// Whether or not the last write wrote a newline.
+    end_newline: bool,
+
+    /// Whether if inside a metadata block (text should not be written)
+    in_non_writing_block: bool,
+
+    table_state: TableState,
+    table_alignments: Vec<Alignment>,
+    table_cell_index: usize,
+    numbers: HashMap<CowStr<'a>, usize>,
+}
+
+impl<'a, I, W> HtmlWriter<'a, I, W>
+where
+    I: Iterator<Item = Event<'a>>,
+    W: StrWrite,
+{
+    fn new(iter: I, writer: W) -> Self {
         Self {
-            root_node,
-            link_refs: HashMap::new(),
-            has_math: false,
+            iter,
+            writer,
+            end_newline: true,
+            in_non_writing_block: false,
+            table_state: TableState::Head,
+            table_alignments: vec![],
+            table_cell_index: 0,
+            numbers: HashMap::new(),
         }
     }
 
-    pub fn to_html(mut self) -> Result<String> {
-        // FIX: Clone since we use self methods in the generator loop.
-        let mdast::Node::Root(mut root) = self.root_node.clone() else {
-            unreachable!()
-        };
+    /// Writes a new line.
+    #[inline]
+    fn write_newline(&mut self) -> Result<(), W::Error> {
+        let (_, _) = (1, 2);
+        self.end_newline = true;
+        self.writer.write_str("\n")
+    }
 
-        // NOTE: Before there was a "pre-pass" here in order to ensure correct links and whatnot.
-        // But it turns out the [`markdown`] crate already handles this for us and doesn't give us
-        // references/footnotes to stuff that doesn't exist, and instead just emits Text nodes.
-        //
-        // We still need to cache link refs.
-        for node in &root.children {
-            if let mdast::Node::Definition(def) = node {
-                let old = self
-                    .link_refs
-                    .insert(def.identifier.clone(), def.url.clone());
-                if old.is_some() {
-                    warn!("Link definition overriden")
+    /// Writes a buffer, and tracks whether or not a newline was written.
+    #[inline]
+    fn write(&mut self, s: &str) -> Result<(), W::Error> {
+        self.writer.write_str(s)?;
+
+        if !s.is_empty() {
+            self.end_newline = s.ends_with('\n');
+        }
+        Ok(())
+    }
+
+    fn run(mut self) -> Result<(), W::Error> {
+        while let Some(event) = self.iter.next() {
+            match event {
+                Start(tag) => {
+                    self.start_tag(tag)?;
+                }
+                End(tag) => {
+                    self.end_tag(tag)?;
+                }
+                Text(text) => {
+                    if !self.in_non_writing_block {
+                        escape_html_body_text(&mut self.writer, &text)?;
+                        self.end_newline = text.ends_with('\n');
+                    }
+                }
+                Code(text) => {
+                    self.write("<code class=inline-code>")?;
+                    escape_html_body_text(&mut self.writer, &text)?;
+                    self.write("</code>")?;
+                }
+                InlineMath(text) => {
+                    self.write(r#"<span class="math math-inline">"#)?;
+                    escape_html(&mut self.writer, &text)?;
+                    self.write("</span>")?;
+                }
+                DisplayMath(text) => {
+                    self.write(r#"<span class="math math-display">"#)?;
+                    escape_html(&mut self.writer, &text)?;
+                    self.write("</span>")?;
+                }
+                Html(html) | InlineHtml(html) => {
+                    self.write(&html)?;
+                }
+                SoftBreak => {
+                    self.write_newline()?;
+                }
+                HardBreak => {
+                    self.write("<br />\n")?;
+                }
+                Rule => {
+                    if self.end_newline {
+                        self.write("<hr />\n")?;
+                    } else {
+                        self.write("\n<hr />\n")?;
+                    }
+                }
+                FootnoteReference(name) => {
+                    let len = self.numbers.len() + 1;
+                    self.write("<sup class=\"footnote-reference\"><a href=\"#")?;
+                    escape_html(&mut self.writer, &name)?;
+                    self.write("\">")?;
+                    let number = *self.numbers.entry(name).or_insert(len);
+                    write!(&mut self.writer, "{}", number)?;
+                    self.write("</a></sup>")?;
+                }
+                TaskListMarker(true) => {
+                    self.write("<input disabled=\"\" type=\"checkbox\" checked=\"\"/>\n")?;
+                }
+                TaskListMarker(false) => {
+                    self.write("<input disabled=\"\" type=\"checkbox\"/>\n")?;
                 }
             }
         }
-
-        // We first need to generate the HTML for the children since we need to determine whether
-        // the content has math in order to only include mathjax when needed.
-        let mut body = String::new();
-
-        for child in root.children.drain(..) {
-            let position = child.position().unwrap().clone();
-            self.generate_common(child, position, &mut body)?;
-        }
-
-        Ok(body)
+        Ok(())
     }
 
-    fn generate_common(
-        &mut self,
-        node: mdast::Node,
-        position: Position,
-        out: &mut impl Write,
-    ) -> Result<()> {
-        match node {
-            mdast::Node::Blockquote(blockquote) => {
-                self.generate_node_with_children(
-                    "blockquote",
-                    &[],
-                    blockquote.children.into_iter(),
-                    out,
-                )?;
-            }
-            mdast::Node::Break(_) => write!(out, "<br>")?,
-            mdast::Node::ThematicBreak(_) => write!(out, "<hr>")?,
-
-            mdast::Node::InlineCode(inline_code) => {
-                self.generate_inline_code(inline_code, position, out)?
-            }
-            mdast::Node::Code(code) => self.generate_codeblock(code, position, out)?,
-            mdast::Node::Delete(delete) => self.generate_strikethrough(delete, position, out)?,
-            mdast::Node::Emphasis(emphasis) => {
-                self.generate_node_with_children("em", &[], emphasis.children.into_iter(), out)?;
-            }
-            mdast::Node::Html(html) => write!(out, "{}", html.value)?,
-            mdast::Node::Strong(strong) => {
-                self.generate_node_with_children("strong", &[], strong.children.into_iter(), out)?;
-            }
-            mdast::Node::Text(text) => write!(out, "{}", text.value)?,
-            mdast::Node::Heading(heading) => self.generate_heading(heading, position, out)?,
-            mdast::Node::Paragraph(paragraph) => {
-                self.generate_node_with_children("p", &[], paragraph.children.into_iter(), out)?;
-            }
-
-            mdast::Node::InlineMath(inline_math) => {
-                self.has_math = true;
-                write!(
-                    out,
-                    "<span class=\"math-inline\">\\({}\\)</p>",
-                    inline_math.value
-                )?;
-            }
-            mdast::Node::Math(math) => {
-                self.has_math = true;
-                write!(out, "<span class=math>\\[{}\\]</span>", math.value)?;
-            }
-
-            mdast::Node::Definition(_definition) => {
-                // unreachable!("link definitions are handled in the pre-pass")
-            }
-            mdast::Node::Link(link) => {
-                self.generate_link(link, position, out)?;
-            }
-            mdast::Node::LinkReference(_link_reference) => {
-                unimplemented!("link references are not implemented, just use basic links!")
-            }
-
-            mdast::Node::Image(image) => {
-                self.generate_image(image, position, out)?;
-            }
-            mdast::Node::ImageReference(_image_reference) => {
-                unimplemented!("image references are not implemented, just use basic images!")
-            }
-
-            mdast::Node::FootnoteDefinition(def) => {
-                write!(
-                    out,
-                    r#"<span class=footnote id="footnote-{}">"#,
-                    def.identifier
-                )?;
-                write!(
-                    out,
-                    r#"<span class=footnote-id>({})</span>"#,
-                    def.identifier
-                )?;
-
-                for child in def.children {
-                    let position = child.position().unwrap().clone();
-                    self.generate_common(child, position, out)?;
+    /// Writes the start of an HTML tag.
+    fn start_tag(&mut self, tag: Tag<'a>) -> Result<(), W::Error> {
+        match tag {
+            Tag::HtmlBlock => Ok(()),
+            Tag::Paragraph => {
+                if self.end_newline {
+                    self.write("<p>")
+                } else {
+                    self.write("\n<p>")
                 }
-
-                writeln!(
-                    out,
-                    r##"<a class=footnote-back href="#footnote-back-{}">&#8617</a>"##,
-                    def.identifier
-                )?;
-                write!(out, "</span>")?;
             }
-            mdast::Node::FootnoteReference(fref) => {
-                let mdast::FootnoteReference { identifier, .. } = fref;
-                // This trick is from <https://stackoverflow.com/questions/66964/how-do-i-create-a-link-to-a-footnote-in-html>
-                // We create a set of anchors, one to go down to the footnote, and one to go back.
-                write!(
-                    out,
-                    r##"<a class="footnote-ref" id="footnote-back-{identifier}" href="#footnote-{identifier}"><sup>{identifier}</sup></a>"##
-                )?;
+            Tag::Heading {
+                level,
+                id,
+                classes,
+                attrs,
+            } => {
+                if self.end_newline {
+                    self.write("<")?;
+                } else {
+                    self.write("\n<")?;
+                }
+                write!(&mut self.writer, "{}", level)?;
+                if let Some(id) = id {
+                    self.write(" id=\"")?;
+                    escape_html(&mut self.writer, &id)?;
+                    self.write("\"")?;
+                }
+                let mut classes = classes.iter();
+                if let Some(class) = classes.next() {
+                    self.write(" class=\"")?;
+                    escape_html(&mut self.writer, class)?;
+                    for class in classes {
+                        self.write(" ")?;
+                        escape_html(&mut self.writer, class)?;
+                    }
+                    self.write("\"")?;
+                }
+                for (attr, value) in attrs {
+                    self.write(" ")?;
+                    escape_html(&mut self.writer, &attr)?;
+                    if let Some(val) = value {
+                        self.write("=\"")?;
+                        escape_html(&mut self.writer, &val)?;
+                        self.write("\"")?;
+                    } else {
+                        self.write("=\"\"")?;
+                    }
+                }
+                self.write(">")
             }
-
-            mdast::Node::List(list) => {
-                let tag = if list.ordered { "ol" } else { "ul" };
-                self.generate_node_with_children(tag, &[], list.children, out)?;
+            Tag::Table(alignments) => {
+                self.table_alignments = alignments;
+                self.write("<table>")
             }
-            mdast::Node::ListItem(list_item) => {
-                self.generate_node_with_children("li", &[], list_item.children, out)?;
+            Tag::TableHead => {
+                self.table_state = TableState::Head;
+                self.table_cell_index = 0;
+                self.write("<thead><tr>")
             }
-
-            // FIX: Tables
-            mdast::Node::Table(_table) => todo!(),
-            mdast::Node::TableRow(_table_row) => todo!(),
-            mdast::Node::TableCell(_table_cell) => todo!(),
-
-            _ => unreachable!("MDX is disabled"),
-        }
-
-        Ok(())
-    }
-
-    fn generate_heading(
-        &mut self,
-        heading: mdast::Heading,
-        position: Position,
-        out: &mut impl Write,
-    ) -> Result<()> {
-        trace!(?position, level = heading.depth, "Got heading");
-
-        // NOTE: Here we limit what we can render inside a heading, otherwise other pieces of
-        // code should instead delegate this work to self.generate_common()
-        write!(out, "<h{}>", heading.depth)?;
-        for child in heading.children {
-            let position = child.position().unwrap().clone();
-            self.generate_common(child, position, out)?;
-        }
-        write!(out, "</h{}>", heading.depth)?;
-
-        Ok(())
-    }
-
-    fn generate_inline_code(
-        &mut self,
-        inline_code: mdast::InlineCode,
-        position: Position,
-        out: &mut impl Write,
-    ) -> Result<()> {
-        trace!(?position, "Got inline code");
-        write!(out, "<code class=inline-code>{}</code>", inline_code.value)?;
-        Ok(())
-    }
-
-    fn generate_strikethrough(
-        &mut self,
-        delete: mdast::Delete,
-        position: Position,
-        out: &mut impl Write,
-    ) -> Result<()> {
-        trace!(?position, "Got strikethrough/delete");
-        self.generate_node_with_children("span", &["strikethrough"], delete.children, out)
-    }
-
-    fn generate_codeblock(
-        &mut self,
-        code: mdast::Code,
-        position: Position,
-        out: &mut impl Write,
-    ) -> Result<()> {
-        let res = codeblock::generate(position, &code)?;
-        write!(out, "{res}")?;
-        Ok(())
-    }
-
-    fn generate_link(
-        &mut self,
-        link: mdast::Link,
-        position: Position,
-        out: &mut impl Write,
-    ) -> Result<()> {
-        trace!(?position, "Got link");
-
-        write!(out, "<a ")?;
-        if let Some(title) = link.title {
-            write!(out, "title=\"{title}\" ")?;
-        }
-
-        // Now, depending on whether the given link is an url or not, we try to find the reference.
-        let url = if Url::parse(&link.url).is_ok() {
-            &link.url
-        } else if let Some(url) = self.link_refs.get(&link.url) {
-            // Otherwise, try to search for existing references.
-            // We are assured that all the link definitions of the document are here since we do a prepass.
-            url
-        } else {
-            // Or just put the "link", we are not smarter than the user.
-            &link.url
-        };
-
-        write!(out, "href=\"{}\">", url)?;
-
-        for child in link.children {
-            let position = child.position().unwrap().clone();
-            self.generate_common(child, position, out)?;
-        }
-
-        write!(out, "</a>")?;
-
-        Ok(())
-    }
-
-    // Basically the same as generate_link
-    fn generate_image(
-        &mut self,
-        image: mdast::Image,
-        position: Position,
-        out: &mut impl Write,
-    ) -> Result<()> {
-        trace!(?position, "Got image");
-
-        // Additional div to make a cool popout effect using css
-        write!(
-            out,
-            r#"<div class=image-container><img alt="{}" "#,
-            image.alt
-        )?;
-        if let Some(title) = &image.title {
-            write!(out, r#"title="{}" "#, title)?;
-        }
-
-        // Now, depending on whether the given link is an url or not, we try to find the reference.
-        let url = if Url::parse(&image.url).is_ok() {
-            &image.url
-        } else if let Some(url) = self.link_refs.get(&image.url) {
-            // Otherwise, try to search for existing references.
-            // We are assured that all the link definitions of the document are here since we do a prepass.
-            url
-        } else {
-            // Or just put the "link", we are not smarter than the user.
-            &image.url
-        };
-
-        write!(out, "src=\"{}\">", url)?;
-
-        if let Some(title) = &image.title {
-            write!(out, r#"<span class=image-title>{}</span>"#, title)?;
-        }
-
-        write!(out, "</div>")?;
-
-        Ok(())
-    }
-
-    fn generate_node_with_children(
-        &mut self,
-        tag_name: &str,
-        classes: &[&str],
-        children: impl IntoIterator<Item = mdast::Node>,
-        out: &mut impl Write,
-    ) -> Result<()> {
-        write!(out, "<{tag_name} ")?;
-        if classes.len() != 0 {
-            write!(out, "class=\"")?;
-            for class in classes {
-                write!(out, "{class} ")?;
+            Tag::TableRow => {
+                self.table_cell_index = 0;
+                self.write("<tr>")
             }
-            write!(out, "\"")?;
+            Tag::TableCell => {
+                match self.table_state {
+                    TableState::Head => {
+                        self.write("<th")?;
+                    }
+                    TableState::Body => {
+                        self.write("<td")?;
+                    }
+                }
+                match self.table_alignments.get(self.table_cell_index) {
+                    Some(&Alignment::Left) => self.write(" style=\"text-align: left\">"),
+                    Some(&Alignment::Center) => self.write(" style=\"text-align: center\">"),
+                    Some(&Alignment::Right) => self.write(" style=\"text-align: right\">"),
+                    _ => self.write(">"),
+                }
+            }
+            Tag::BlockQuote(kind) => {
+                let class_str = match kind {
+                    None => "",
+                    Some(kind) => match kind {
+                        BlockQuoteKind::Note => " class=\"markdown-alert-note\"",
+                        BlockQuoteKind::Tip => " class=\"markdown-alert-tip\"",
+                        BlockQuoteKind::Important => " class=\"markdown-alert-important\"",
+                        BlockQuoteKind::Warning => " class=\"markdown-alert-warning\"",
+                        BlockQuoteKind::Caution => " class=\"markdown-alert-caution\"",
+                    },
+                };
+                if self.end_newline {
+                    self.write(&format!("<blockquote{}>\n", class_str))
+                } else {
+                    self.write(&format!("\n<blockquote{}>\n", class_str))
+                }
+            }
+            Tag::CodeBlock(info) => {
+                if !self.end_newline {
+                    self.write_newline()?;
+                }
+                match info {
+                    CodeBlockKind::Fenced(info) => {
+                        let lang = info.split(' ').next().unwrap();
+                        self.write("<div class=codeblock>")?;
+                        if lang.is_empty() {
+                            self.write("<pre><code>")
+                        } else {
+                            self.write("<p class=language-name>")?;
+                            escape_html(&mut self.writer, lang)?;
+                            self.write("</p>")?;
+
+                            self.write("<pre><code class=\"")?;
+                            escape_html(&mut self.writer, lang)?;
+                            self.write("\">")
+                        }
+                    }
+                    CodeBlockKind::Indented => self.write("<div class=codeblock><pre><code>"),
+                }
+            }
+            Tag::List(Some(1)) => {
+                if self.end_newline {
+                    self.write("<ol>\n")
+                } else {
+                    self.write("\n<ol>\n")
+                }
+            }
+            Tag::List(Some(start)) => {
+                if self.end_newline {
+                    self.write("<ol start=\"")?;
+                } else {
+                    self.write("\n<ol start=\"")?;
+                }
+                write!(&mut self.writer, "{}", start)?;
+                self.write("\">\n")
+            }
+            Tag::List(None) => {
+                if self.end_newline {
+                    self.write("<ul>\n")
+                } else {
+                    self.write("\n<ul>\n")
+                }
+            }
+            Tag::Item => {
+                if self.end_newline {
+                    self.write("<li>")
+                } else {
+                    self.write("\n<li>")
+                }
+            }
+            Tag::DefinitionList => {
+                if self.end_newline {
+                    self.write("<dl>\n")
+                } else {
+                    self.write("\n<dl>\n")
+                }
+            }
+            Tag::DefinitionListTitle => {
+                if self.end_newline {
+                    self.write("<dt>")
+                } else {
+                    self.write("\n<dt>")
+                }
+            }
+            Tag::DefinitionListDefinition => {
+                if self.end_newline {
+                    self.write("<dd>")
+                } else {
+                    self.write("\n<dd>")
+                }
+            }
+            Tag::Subscript => self.write("<sub>"),
+            Tag::Superscript => self.write("<sup>"),
+            Tag::Emphasis => self.write("<em>"),
+            Tag::Strong => self.write("<strong>"),
+            Tag::Strikethrough => self.write("<del>"),
+            Tag::Link {
+                link_type: LinkType::Email,
+                dest_url,
+                title,
+                id: _,
+            } => {
+                self.write("<a href=\"mailto:")?;
+                escape_href(&mut self.writer, &dest_url)?;
+                if !title.is_empty() {
+                    self.write("\" title=\"")?;
+                    escape_html(&mut self.writer, &title)?;
+                }
+                self.write("\">")
+            }
+            Tag::Link {
+                link_type: _,
+                dest_url,
+                title,
+                id: _,
+            } => {
+                self.write("<a href=\"")?;
+                escape_href(&mut self.writer, &dest_url)?;
+                if !title.is_empty() {
+                    self.write("\" title=\"")?;
+                    escape_html(&mut self.writer, &title)?;
+                }
+                self.write("\">")
+            }
+            Tag::Image {
+                link_type: _,
+                dest_url,
+                title,
+                id: _,
+            } => {
+                self.write("<img src=\"")?;
+                escape_href(&mut self.writer, &dest_url)?;
+                self.write("\" alt=\"")?;
+                self.raw_text()?;
+                if !title.is_empty() {
+                    self.write("\" title=\"")?;
+                    escape_html(&mut self.writer, &title)?;
+                }
+                self.write("\" />")
+            }
+            Tag::FootnoteDefinition(name) => {
+                if self.end_newline {
+                    self.write("<div class=\"footnote-definition\" id=\"")?;
+                } else {
+                    self.write("\n<div class=\"footnote-definition\" id=\"")?;
+                }
+                escape_html(&mut self.writer, &name)?;
+                self.write("\"><sup class=\"footnote-definition-label\">")?;
+                let len = self.numbers.len() + 1;
+                let number = *self.numbers.entry(name).or_insert(len);
+                write!(&mut self.writer, "{}", number)?;
+                self.write("</sup>")
+            }
+            Tag::MetadataBlock(_) => {
+                self.in_non_writing_block = true;
+                Ok(())
+            }
         }
-        write!(out, ">")?;
+    }
 
-        for child in children {
-            let position = child.position().cloned().unwrap();
-            self.generate_common(child, position, out)?;
+    fn end_tag(&mut self, tag: TagEnd) -> Result<(), W::Error> {
+        match tag {
+            TagEnd::HtmlBlock => {}
+            TagEnd::Paragraph => {
+                self.write("</p>\n")?;
+            }
+            TagEnd::Heading(level) => {
+                self.write("</")?;
+                write!(&mut self.writer, "{}", level)?;
+                self.write(">\n")?;
+            }
+            TagEnd::Table => {
+                self.write("</tbody></table>\n")?;
+            }
+            TagEnd::TableHead => {
+                self.write("</tr></thead><tbody>\n")?;
+                self.table_state = TableState::Body;
+            }
+            TagEnd::TableRow => {
+                self.write("</tr>\n")?;
+            }
+            TagEnd::TableCell => {
+                match self.table_state {
+                    TableState::Head => {
+                        self.write("</th>")?;
+                    }
+                    TableState::Body => {
+                        self.write("</td>")?;
+                    }
+                }
+                self.table_cell_index += 1;
+            }
+            TagEnd::BlockQuote(_) => {
+                self.write("</blockquote>\n")?;
+            }
+            TagEnd::CodeBlock => {
+                self.write("</code></pre></div>\n")?;
+            }
+            TagEnd::List(true) => {
+                self.write("</ol>\n")?;
+            }
+            TagEnd::List(false) => {
+                self.write("</ul>\n")?;
+            }
+            TagEnd::Item => {
+                self.write("</li>\n")?;
+            }
+            TagEnd::DefinitionList => {
+                self.write("</dl>\n")?;
+            }
+            TagEnd::DefinitionListTitle => {
+                self.write("</dt>\n")?;
+            }
+            TagEnd::DefinitionListDefinition => {
+                self.write("</dd>\n")?;
+            }
+            TagEnd::Emphasis => {
+                self.write("</em>")?;
+            }
+            TagEnd::Superscript => {
+                self.write("</sup>")?;
+            }
+            TagEnd::Subscript => {
+                self.write("</sub>")?;
+            }
+            TagEnd::Strong => {
+                self.write("</strong>")?;
+            }
+            TagEnd::Strikethrough => {
+                self.write("</del>")?;
+            }
+            TagEnd::Link => {
+                self.write("</a>")?;
+            }
+            TagEnd::Image => (), // shouldn't happen, handled in start
+            TagEnd::FootnoteDefinition => {
+                self.write("</div>\n")?;
+            }
+            TagEnd::MetadataBlock(_) => {
+                self.in_non_writing_block = false;
+            }
         }
-
-        write!(out, "</{tag_name}>")?;
-
         Ok(())
     }
+
+    // run raw text, consuming end tag
+    fn raw_text(&mut self) -> Result<(), W::Error> {
+        let mut nest = 0;
+        while let Some(event) = self.iter.next() {
+            match event {
+                Start(_) => nest += 1,
+                End(_) => {
+                    if nest == 0 {
+                        break;
+                    }
+                    nest -= 1;
+                }
+                Html(_) => {}
+                InlineHtml(text) | Code(text) | Text(text) => {
+                    // Don't use escape_html_body_text here.
+                    // The output of this function is used in the `alt` attribute.
+                    escape_html(&mut self.writer, &text)?;
+                    self.end_newline = text.ends_with('\n');
+                }
+                InlineMath(text) => {
+                    self.write("$")?;
+                    escape_html(&mut self.writer, &text)?;
+                    self.write("$")?;
+                }
+                DisplayMath(text) => {
+                    self.write("$$")?;
+                    escape_html(&mut self.writer, &text)?;
+                    self.write("$$")?;
+                }
+                SoftBreak | HardBreak | Rule => {
+                    self.write(" ")?;
+                }
+                FootnoteReference(name) => {
+                    let len = self.numbers.len() + 1;
+                    let number = *self.numbers.entry(name).or_insert(len);
+                    write!(&mut self.writer, "[{}]", number)?;
+                }
+                TaskListMarker(true) => self.write("[x]")?,
+                TaskListMarker(false) => self.write("[ ]")?,
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn write_html_fmt<'a, I, W>(writer: W, iter: I) -> std::fmt::Result
+where
+    I: Iterator<Item = Event<'a>>,
+    W: std::fmt::Write,
+{
+    HtmlWriter::new(iter, FmtWriter(writer)).run()
 }

@@ -10,7 +10,6 @@ extern crate tracing;
 mod config;
 mod frontmatter;
 mod generator;
-mod generators;
 mod style;
 mod templates;
 mod utils;
@@ -21,12 +20,12 @@ use std::{
 };
 
 use eyre::{Context, bail, eyre};
-use markdown::mdast;
+use pulldown_cmark::{Event, MetadataBlockKind, Options, Tag, TagEnd};
 use tokio::{fs, io};
 use utils::to_dot_relative;
 
 pub use config::{BlogConfig, Config, Error as ConfigError, StylingConfig};
-pub use generator::Generator;
+pub use generator::write_html_fmt;
 pub use style::compile_to_stylesheet;
 
 use templates::{Templates, context};
@@ -170,27 +169,63 @@ impl Compiler {
     pub async fn recompile_page(&mut self, input_path: impl AsRef<Path>) -> eyre::Result<()> {
         let input_path = to_dot_relative(input_path);
 
-        let raw_content = fs::read_to_string(&input_path).await?;
-        let mut contents = markdown::to_mdast(&raw_content, &parse_options())
-            .map_err(|msg| eyre!("failed to parse markdown: {msg}"))?;
+        let file_contents = fs::read_to_string(&input_path).await?;
 
-        // Get the frontmatter out.
-        let children = contents
-            .children_mut()
-            .ok_or_else(|| eyre!("missing frontmatter"))?;
-        if children.len() < 1 {
-            bail!("missing frontmatter")
-        }
-        let frontmatter_node = children.remove(0);
-        let mdast::Node::Toml(mdast::Toml {
-            value: frontmatter_str,
-            ..
-        }) = frontmatter_node
-        else {
-            bail!("invalid frontmatter format, we use TOML for frontmatter")
+        let options = Options::ENABLE_FOOTNOTES
+            | Options::ENABLE_STRIKETHROUGH
+            | Options::ENABLE_TABLES
+            | Options::ENABLE_TASKLISTS
+            | Options::ENABLE_SMART_PUNCTUATION
+            | Options::ENABLE_HEADING_ATTRIBUTES
+            | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS
+            | Options::ENABLE_OLD_FOOTNOTES
+            | Options::ENABLE_MATH
+            | Options::ENABLE_SUPERSCRIPT
+            | Options::ENABLE_SUBSCRIPT;
+        let mut parser = pulldown_cmark::Parser::new_ext(&file_contents, options);
+
+        // First extract the frontmatter from the parser
+        let frontmatter = {
+            let first_event = parser.next().ok_or_else(|| eyre!("missing frontmatter"))?;
+
+            let Event::Start(Tag::MetadataBlock(MetadataBlockKind::PlusesStyle)) = first_event
+            else {
+                bail!("invalid frontmatter node")
+            };
+
+            // Collect all text content until we hit the End tag
+            let mut frontmatter_content = String::new();
+
+            loop {
+                // FIXME: We can potentially get stuck in this loop? The parser should not give us a begin block without
+                // an end block anyway.
+                let Some(event) = parser.next() else {
+                    break;
+                };
+
+                match event {
+                    // No more frontmatter
+                    Event::End(TagEnd::MetadataBlock(MetadataBlockKind::PlusesStyle)) => break,
+                    // Otherwise keep accumulating the text in the string
+                    Event::Text(text) => frontmatter_content.push_str(&text),
+                    Event::SoftBreak | Event::HardBreak => {
+                        frontmatter_content.push('\n');
+                    }
+                    _ => unreachable!("inside frontmatter"),
+                }
+            }
+
+            let frontmatter = frontmatter::from_str(&frontmatter_content)
+                .context("failed to parse frontmatter")?;
+            frontmatter
         };
 
-        let frontmatter = frontmatter::from_str(&frontmatter_str)?;
+        let body = {
+            let mut out = String::with_capacity(1024);
+            write_html_fmt(&mut out, parser)?;
+            out
+        };
+
         let content_path = strip_leading_segment(&input_path, "content");
         let output_path = self.build_path.join(&content_path).with_extension("html");
         // We can calculate the resulting URL from the output path.
@@ -205,10 +240,8 @@ impl Compiler {
 
         // Meta information.
         const WPM: f64 = 175.0;
-        let word_count = utils::count_words(&contents);
+        let word_count = 1000; // WIP:
         let reading_time = ((word_count as f64 / WPM) * 60.0).round() as usize;
-
-        let body = Generator::new(contents).to_html()?;
 
         // FIXME: figure out which templates to use
         let template = self.templates.index_template();
@@ -251,26 +284,5 @@ impl Compiler {
         self.templates.reload(path).await?;
         // FIXME: Figure out which pages need to change
         Ok(())
-    }
-}
-
-/// Options used to do the parsing of the config.
-///
-/// It's GFM+some additional stuff enabled.
-fn parse_options() -> markdown::ParseOptions {
-    markdown::ParseOptions {
-        constructs: markdown::Constructs {
-            autolink: true,
-            code_text: true,
-            gfm_autolink_literal: true,
-            html_flow: true,
-            label_start_image: true,
-            math_flow: true,
-            block_quote: true,
-            frontmatter: true,
-            math_text: true,
-            ..markdown::Constructs::gfm()
-        },
-        ..Default::default()
     }
 }
