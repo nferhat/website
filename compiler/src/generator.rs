@@ -67,35 +67,6 @@ impl Generator {
         // the content has math in order to only include mathjax when needed.
         let mut body = String::new();
 
-        // FIXME: Move to compiler
-        // // Before children, we generate a little paragraph with metadata with the title
-        // writeln!(
-        //     &mut body,
-        //     "<h1 class={class}>{txt}</h1>",
-        //     class = if !frontmatter.metadata {
-        //         "pad-down"
-        //     } else {
-        //         ""
-        //     },
-        //     txt = frontmatter.title
-        // )?;
-
-        // if frontmatter.metadata {
-        //     let word_count = count_words(&contents);
-        //     let reading_speed = 175.0; // FIX: Not hardcode
-        //     let (minutes, seconds) = estimate_reading_time_min_sec(word_count, reading_speed);
-        //     write!(
-        //         &mut body,
-        //         "<p class=metadata>{word_count} words &bull; {minutes}'{seconds}\""
-        //     )?;
-        //     if frontmatter.tags.len() >= 1 {
-        //         for tag in &frontmatter.tags {
-        //             write!(&mut body, " &bull; #{tag}")?;
-        //         }
-        //     }
-        //     writeln!(&mut body, "</p>")?;
-        // }
-
         for child in root.children.drain(..) {
             let position = child.position().unwrap().clone();
             self.generate_common(child, position, &mut body)?;

@@ -37,6 +37,16 @@ pub struct Page<'ctx> {
     pub tags: Vec<String>,
     /// The title of this page. Set in the frontmatter.
     pub title: &'ctx str,
+    /// Meta information about this page.
+    pub meta: PageMeta,
+}
+
+#[derive(Serialize)]
+pub struct PageMeta {
+    /// The word count of this page.
+    pub word_count: usize,
+    /// The time in seconds to read this page.
+    pub reading_time: usize,
 }
 
 #[derive(Serialize)]

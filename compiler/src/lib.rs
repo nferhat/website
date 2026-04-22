@@ -203,10 +203,16 @@ impl Compiler {
             slug.to_string_lossy()
         };
 
+        // Meta information.
+        const WPM: f64 = 175.0;
+        let word_count = utils::count_words(&contents);
+        let reading_time = ((word_count as f64 / WPM) * 60.0).round() as usize;
+
         let body = Generator::new(contents).to_html()?;
 
         // FIXME: figure out which templates to use
         let template = self.templates.index_template();
+
         let context = context::Context {
             page: context::Page {
                 contents: &body,
@@ -215,6 +221,10 @@ impl Compiler {
                 slug: &*slug,
                 url: &*url,
                 tags: frontmatter.tags.clone(),
+                meta: context::PageMeta {
+                    reading_time,
+                    word_count,
+                },
             },
             site: &self.site_ctx,
             build: &self.build_ctx,
