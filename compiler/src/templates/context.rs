@@ -37,6 +37,8 @@ pub struct Page<'ctx> {
     pub tags: Vec<String>,
     /// The title of this page. Set in the frontmatter.
     pub title: &'ctx str,
+    /// The description of this page. Set in the frontmatter.
+    pub description: Option<&'ctx str>,
     /// Whether this page is still a draft.
     pub draft: bool,
     /// Meta information about this page.

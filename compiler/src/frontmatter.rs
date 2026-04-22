@@ -25,6 +25,8 @@ const fn default_true() -> bool {
 pub struct Frontmatter {
     /// The title of this page.
     pub title: String,
+    /// The description of this page.
+    pub description: Option<String>,
     /// The tags of this page.
     #[serde(default = "Vec::new")]
     pub tags: Vec<String>,

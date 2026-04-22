@@ -229,7 +229,28 @@ impl Compiler {
 
         // Meta information.
         const WPM: f64 = 175.0;
-        let word_count = 1000; // WIP:
+        let word_count = {
+            // Skip frontmatter by finding content after second +++
+            let content = if let Some(first_delim) = file_contents.find("+++") {
+                if let Some(second_delim_offset) = file_contents[first_delim + 3..].find("+++") {
+                    let second_delim = first_delim + 3 + second_delim_offset;
+                    &file_contents[second_delim + 3..]
+                } else {
+                    &file_contents
+                }
+            } else {
+                &file_contents
+            };
+
+            // Count words, filtering out pure-syntax tokens
+            content
+                .split_whitespace()
+                .filter(|word| {
+                    // Skip if word is all markdown syntax characters
+                    !word.chars().all(|c| "#+*_`[]()!-=|>".contains(c))
+                })
+                .count()
+        };
         let reading_time = ((word_count as f64 / WPM) * 60.0).round() as usize;
 
         // Remove the previous one. the {{pages}} variable should have all pages but the current one.
@@ -243,6 +264,7 @@ impl Compiler {
             url: url.to_string(),
             tags: frontmatter.tags.clone(),
             title: frontmatter.title.clone(),
+            description: frontmatter.description.clone(),
             draft: frontmatter.draft,
             meta: context::PageMeta {
                 reading_time,
@@ -323,6 +345,8 @@ pub struct SitePage {
     pub tags: Vec<String>,
     /// The title of this page. Set in the frontmatter.
     pub title: String,
+    /// The description of this page. Set in the frontmatter.
+    pub description: Option<String>,
     /// Whether this page is still a draft.
     pub draft: bool,
     /// Meta information about this page.
@@ -338,6 +362,7 @@ impl<'ctx> Into<context::Page<'ctx>> for &'ctx SitePage {
             url: &self.url,
             tags: self.tags.clone(), // FIXME: Clone
             title: &self.title,
+            description: self.description.as_ref().map(|s| s.as_ref()),
             draft: self.draft,
             meta: self.meta,
         }
