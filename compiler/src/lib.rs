@@ -288,14 +288,16 @@ impl Compiler {
     }
 
     /// Reloads a given template path.
-    pub async fn reload_template(&mut self, path: impl AsRef<Path>) -> eyre::Result<()> {
-        let path = path.as_ref();
-        self.templates.reload(path).await?;
+    pub async fn reload_template(&mut self, _path: impl AsRef<Path>) -> eyre::Result<()> {
         // FIXME: Figure out what to recompile.
         //
         // Right now we recompile everything since we are doing partials, and figuring out which templates
         // depend on who is currently nearly impossible since the templating engine acts as a "black box".
+
+        let templates_dir = self.root.join("templates");
+        self.templates = Templates::new(templates_dir).await?;
         self.compile_all().await?;
+
         Ok(())
     }
 }

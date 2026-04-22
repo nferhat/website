@@ -4,10 +4,8 @@ use std::{
     sync::Arc,
 };
 
-use eyre::{ContextCompat, Result, bail};
+use eyre::{Result, bail};
 use tokio::fs;
-
-use crate::utils;
 
 pub mod context;
 mod partials;
@@ -47,39 +45,6 @@ impl Templates {
             index,
             named_templates: HashMap::new(),
         })
-    }
-
-    /// Reloads a given template.
-    pub async fn reload(&mut self, path: impl AsRef<Path>) -> Result<()> {
-        let path = path.as_ref();
-
-        // FIXME: Should absolute paths to templates resolve?
-        let full_path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.templates_dir.join(path)
-        };
-
-        // Load the new template
-        let template = Self::load_template_internal(&full_path, &self.parser).await?;
-
-        let file_name = full_path
-            .file_name()
-            .context("template without filename")?
-            .to_string_lossy();
-
-        match file_name.trim() {
-            "index.liquid" => self.index = template,
-            _ => {
-                let path = utils::strip_leading_segment(&full_path, &self.templates_dir);
-                let key = path.to_string_lossy().to_string();
-                self.named_templates.insert(key, template);
-            }
-        }
-
-        // FIXME: Other templates
-
-        Ok(())
     }
 
     /// Tries to get a template from the cached `named_templates`. If it cannot find it, it will try
