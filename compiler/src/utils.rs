@@ -3,6 +3,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use rand::{RngExt, distr::Alphanumeric};
+
 /// Converts a path into a `./`-prefixed path relative to the current working directory.
 ///
 /// Behavior:
@@ -77,4 +79,13 @@ pub fn strip_leading_segment(path: &Path, prefix: impl AsRef<Path>) -> PathBuf {
         }
         Err(_) => path.to_path_buf(), // return original (not normalized) if no match
     }
+}
+
+/// Generates a short random string of given `len`
+pub fn random_string(len: usize) -> String {
+    rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(len)
+        .map(char::from)
+        .collect()
 }

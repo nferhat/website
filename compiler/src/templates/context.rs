@@ -18,6 +18,8 @@ pub struct Build {
     /// the live server (provided by the `cli` crate). In this case you should include a script that
     /// loads `/reload-script.js`
     pub dev: bool,
+    /// The stylesheet path.
+    pub stylesheet_link: String,
 }
 
 #[derive(Serialize)]

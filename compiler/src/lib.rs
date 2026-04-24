@@ -33,10 +33,9 @@ pub use generator::write_html_fmt;
 pub use style::compile_to_stylesheet;
 
 use frontmatter::Frontmatter;
+use highlighter::GrammarCache;
 use templates::{Templates, context};
-use utils::strip_leading_segment;
-
-use crate::highlighter::GrammarCache;
+use utils::{random_string, strip_leading_segment};
 
 /// The main compiler.
 pub struct Compiler {
@@ -48,7 +47,6 @@ pub struct Compiler {
     // Pre-cache some paths here because we are going to use them a lot.
     #[allow(unused)]
     build_path: PathBuf,
-    style_output_path: PathBuf,
 
     /// The templates for this website.
     templates: Templates,
@@ -82,7 +80,6 @@ impl Compiler {
         let root = path::absolute(root)?;
 
         let build_path = root.join("dist");
-        let style_output_path = build_path.join("style.css");
 
         let templates_dir = root.join("templates");
         let templates = Templates::new(&templates_dir).await?;
@@ -92,7 +89,13 @@ impl Compiler {
         let site_ctx = context::Site {
             base_url: config.base_url.clone(),
         };
-        let build_ctx = context::Build { dev: false };
+
+        // NOTE: Here we don't set a style.css because we don't care much about it.
+        // It's just to initialize it. After creating self it will get initialized to an actual value.
+        let build_ctx = context::Build {
+            dev: false,
+            stylesheet_link: String::from("/style.css"),
+        };
 
         let languages_dir = root.join("languages");
         let grammar_cache = GrammarCache::new(&languages_dir).await?;
@@ -100,7 +103,6 @@ impl Compiler {
         let mut this = Self {
             root,
             build_path,
-            style_output_path,
             config,
 
             templates,
@@ -129,6 +131,7 @@ impl Compiler {
     /// This goes over all the pages of the website and generates everything. This also cleans up
     /// any cached page from incremental compilation.
     pub async fn compile_all(&mut self) -> eyre::Result<()> {
+        _ = fs::create_dir_all(self.build_path.join("static")).await?;
         self.recompile_stylesheets().await?;
         let dir = self.root.join(&self.config.content_dir);
         self.recompile_pages(&dir, false).await?;
@@ -199,7 +202,18 @@ impl Compiler {
         let highlight_stylesheet = self.grammar_cache.stylesheet()?;
         style_contents.push_str(&highlight_stylesheet);
 
-        fs::write(&self.style_output_path, style_contents).await?;
+        // First remove the previous one
+        let previous = self.build_path.join(&self.build_ctx.stylesheet_link);
+        _ = fs::remove_file(&previous).await; // even if it fails it's not that important.
+
+        let unique_id = random_string(8);
+        let output_path = self
+            .build_path
+            .join("static")
+            .join(format!("style.{unique_id}.css"));
+        self.build_ctx.stylesheet_link = format!("/static/style.{unique_id}.css");
+
+        fs::write(output_path, style_contents).await?;
 
         Ok(())
     }
