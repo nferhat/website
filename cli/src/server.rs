@@ -182,21 +182,26 @@ fn is_markdown(p: &Path) -> bool {
 }
 
 async fn serve(tx: broadcast::Sender<()>, path: &Path, port: u16) -> eyre::Result<()> {
-    // Disable caching in the browser.
-    let disable_caching_layer = SetResponseHeaderLayer::overriding(
+    let aggressive_caching_layer = SetResponseHeaderLayer::overriding(
         CACHE_CONTROL,
-        http::HeaderValue::from_static("no-cache"),
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
     );
+
+    let static_assets_router: Router<()> = Router::new()
+        .fallback_service(ServeDir::new(path.join("static")))
+        // Aggressive caching for assets. They should be cache-busted whenever they change.
+        // The compiler handles everything, from assigning them unique names and only changing them on content hash change.
+        .layer(aggressive_caching_layer);
 
     let app = Router::new()
         // Hot reloading route. We use an SSE event with some additional javascript on the client to
         // achieve this. We also include the script needed to reload.
         .route("/__reload__", axum::routing::get(reload_sse))
         .route("/reload-script.js", axum::routing::get(reload_script))
-        .nest_service("/assets/", ServeDir::new(path.join("static")))
-        .with_state(tx)
-        .layer(disable_caching_layer)
-        .fallback_service(ServeDir::new(&path));
+        .nest_service("/assets/", static_assets_router)
+        .layer(CompressionLayer::new())
+        .fallback_service(ServeDir::new(&path))
+        .with_state(tx);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
