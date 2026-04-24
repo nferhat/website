@@ -1,4 +1,7 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use clap::Parser;
 use compiler::Compiler;
@@ -28,6 +31,12 @@ pub enum Command {
     Serve {
         #[arg(long)]
         port: Option<u16>,
+    },
+    /// Builds all tree-sitter grammars.
+    BuildGrammars {
+        /// Maximum number of parallel jobs (defaults to number of physical CPUs)
+        #[arg(short = 'j', long)]
+        jobs: Option<usize>,
     },
 }
 
@@ -75,8 +84,114 @@ fn main() -> eyre::Result<()> {
                 let port = port.unwrap_or(7272);
                 server::run(root, config, port).await
             }
+            Command::BuildGrammars { jobs } => {
+                let languages_dir = root.join("languages");
+                let max_jobs = jobs.unwrap_or_else(|| {
+                    std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(1)
+                });
+                build_all_grammars(&languages_dir, max_jobs).await
+            }
         }
     })?;
+
+    Ok(())
+}
+
+async fn build_all_grammars(languages_dir: &Path, max_jobs: usize) -> eyre::Result<()> {
+    if !languages_dir.exists() {
+        eyre::bail!("languages directory does not exist: {:?}", languages_dir);
+    }
+
+    // Collect all grammar directories (excluding 'build/')
+    let mut grammar_dirs = Vec::new();
+    let mut entries = tokio::fs::read_dir(languages_dir)
+        .await
+        .context("failed to read languages directory")?;
+
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let file_name_str = file_name.to_string_lossy();
+
+        if file_name_str == "_build" || !path.is_dir() {
+            continue;
+        }
+
+        let config_path = path.join("config.toml");
+        if config_path.is_file() {
+            grammar_dirs.push(file_name_str.to_string());
+        }
+    }
+
+    if grammar_dirs.is_empty() {
+        info!("no grammars found to build");
+        return Ok(());
+    }
+
+    info!(count = %grammar_dirs.len(), ?max_jobs, "building grammars");
+
+    // Create the grammar cache
+    let cache = compiler::highlighter::GrammarCache::new(languages_dir)
+        .await
+        .context("failed to initialize grammar cache")?;
+    let cache = Arc::new(cache);
+
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_jobs));
+
+    let jobs: Vec<_> = grammar_dirs
+        .into_iter()
+        .map(|grammar_name| {
+            let cache = Arc::clone(&cache);
+            let semaphore = Arc::clone(&semaphore);
+            async move {
+                let _permit = semaphore.acquire().await.expect("semaphore closed");
+                let result = cache.load(&grammar_name).await;
+                if let Err(err) = &result {
+                    error!(
+                        grammar = %grammar_name,
+                        error = %err,
+                        "failed to build grammar"
+                    );
+                }
+                (grammar_name, result)
+            }
+        })
+        .collect();
+
+    let results = futures::future::join_all(jobs).await;
+
+    // Process results and generate report
+    let mut built = Vec::new();
+    let mut failed = 0usize;
+
+    for (grammar_id, result) in results {
+        match result {
+            Ok(_) => {
+                built.push(grammar_id);
+            }
+            Err(_err) => {
+                failed += 1;
+            }
+        }
+    }
+
+    // Print the report
+    if !built.is_empty() {
+        info!(
+            count = built.len(),
+            grammars = ?built,
+            "successfully built grammars"
+        );
+    }
+
+    if failed > 0 {
+        info!("built {} grammars", built.len());
+        warn!("failed to build {} grammars", failed);
+    } else {
+        info!(count = built.len(), "all grammars built successfully");
+    }
 
     Ok(())
 }

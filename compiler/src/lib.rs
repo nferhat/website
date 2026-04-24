@@ -10,7 +10,7 @@ extern crate tracing;
 mod config;
 mod frontmatter;
 mod generator;
-mod highlighter;
+pub mod highlighter;
 mod style;
 mod templates;
 mod utils;
