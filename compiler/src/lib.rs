@@ -190,10 +190,14 @@ impl Compiler {
             style::compile_to_stylesheet(&sass_input, &load_paths, syntax)
         });
 
-        let style_contents = match style_res.await {
+        let mut style_contents = match style_res.await {
             Ok(res) => res.context("sass compilation error"),
             Err(_) => eyre::bail!("background task failed"),
         }?;
+
+        // Add styling of tree-sitter syntax nodes.
+        let highlight_stylesheet = self.grammar_cache.stylesheet()?;
+        style_contents.push_str(&highlight_stylesheet);
 
         fs::write(&self.style_output_path, style_contents).await?;
 
