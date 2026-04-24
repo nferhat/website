@@ -134,7 +134,7 @@ async fn watch_for_changes(
             } else if is_markdown(&path) {
                 trace!(?path, "Triggering page rebuild due to path change");
 
-                match compiler.recompile_page(&path).await {
+                match compiler.recompile_page(&path, true).await {
                     Ok(()) => {
                         reload_sender.send(()).ok();
                         info!(?path, "Rebuilt page")
@@ -193,9 +193,10 @@ async fn serve(tx: broadcast::Sender<()>, path: &Path, port: u16) -> eyre::Resul
         // achieve this. We also include the script needed to reload.
         .route("/__reload__", axum::routing::get(reload_sse))
         .route("/reload-script.js", axum::routing::get(reload_script))
+        .nest_service("/assets/", ServeDir::new(path.join("static")))
         .with_state(tx)
         .layer(disable_caching_layer)
-        .fallback_service(ServeDir::new(path));
+        .fallback_service(ServeDir::new(&path));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();

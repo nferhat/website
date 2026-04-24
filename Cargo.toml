@@ -16,3 +16,14 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 markdown = "1.0.0"
 tokio = { version = "1.51.1", features = ["full"] }
 futures = "0.3.32"
+
+# Optimizations go brrr.
+# Does it really matter for such a small website? of course it does
+[profile.opt]
+inherits = "release"
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+# Still optimize the dev-build plenty
+[profile.dev]
+opt-level = 3

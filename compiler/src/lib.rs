@@ -10,6 +10,7 @@ extern crate tracing;
 mod config;
 mod frontmatter;
 mod generator;
+mod highlighter;
 mod style;
 mod templates;
 mod utils;
@@ -21,7 +22,9 @@ use std::{
 };
 
 use eyre::{Context, bail, eyre};
-use pulldown_cmark::{Event, MetadataBlockKind, Options, Tag, TagEnd};
+use pulldown_cmark::{
+    BrokenLink, BrokenLinkCallback, Event, MetadataBlockKind, Options, Tag, TagEnd,
+};
 use tokio::{fs, io};
 use utils::to_dot_relative;
 
@@ -29,9 +32,11 @@ pub use config::{BlogConfig, Config, Error as ConfigError, StylingConfig};
 pub use generator::write_html_fmt;
 pub use style::compile_to_stylesheet;
 
+use frontmatter::Frontmatter;
 use templates::{Templates, context};
+use utils::strip_leading_segment;
 
-use crate::utils::strip_leading_segment;
+use crate::highlighter::GrammarCache;
 
 /// The main compiler.
 pub struct Compiler {
@@ -47,6 +52,13 @@ pub struct Compiler {
 
     /// The templates for this website.
     templates: Templates,
+
+    /// The grammar cache/registry for this website.
+    ///
+    /// We load tree-sitter grammars on demand and cache them in this struct. It handles the fetching, compiling
+    /// and building of the grammars. However the websites should be the ones providing the languages and queries
+    /// they want to support.
+    grammar_cache: GrammarCache,
 
     /// The cached pages of this site.
     ///
@@ -82,14 +94,21 @@ impl Compiler {
         };
         let build_ctx = context::Build { dev: false };
 
+        let languages_dir = root.join("languages");
+        let grammar_cache = GrammarCache::new(&languages_dir).await?;
+
         let mut this = Self {
             root,
             build_path,
             style_output_path,
-            templates,
             config,
+
+            templates,
+
             site_ctx,
             build_ctx,
+
+            grammar_cache,
             page_cache: HashMap::new(),
         };
 
@@ -111,14 +130,11 @@ impl Compiler {
     /// any cached page from incremental compilation.
     pub async fn compile_all(&mut self) -> eyre::Result<()> {
         self.recompile_stylesheets().await?;
-
-        // let root = Arc::clone(&self;
-        self.recompile_pages(self.root.clone()).await?;
-
+        self.recompile_pages(self.root.clone(), true).await?;
         Ok(())
     }
 
-    async fn recompile_pages(&mut self, dir: impl AsRef<Path>) -> eyre::Result<()> {
+    async fn recompile_pages(&mut self, dir: impl AsRef<Path>, reload: bool) -> eyre::Result<()> {
         let mut stack = Vec::with_capacity(10);
         stack.push(dir.as_ref().to_owned());
 
@@ -140,7 +156,7 @@ impl Compiler {
                         continue 'entries;
                     }
 
-                    self.recompile_page(path).await?;
+                    self.recompile_page(path, reload).await?;
                 }
             }
         }
@@ -186,91 +202,130 @@ impl Compiler {
     ///
     /// It figures out the needed other pages that need to recompile in extra to this one,
     /// for example if you ask to recompile a blog page, the blogs index page will also update.
-    pub async fn recompile_page(&mut self, input_path: impl AsRef<Path>) -> eyre::Result<()> {
+    ///
+    /// If `reload` is false, the page's pre-generated body will be reused, and instead only
+    /// the templating engine will be ran.
+    pub async fn recompile_page(
+        &mut self,
+        input_path: impl AsRef<Path>,
+        reload: bool,
+    ) -> eyre::Result<()> {
         let input_path = to_dot_relative(input_path);
 
-        let file_contents = fs::read_to_string(&input_path).await?;
-
-        let options = Options::ENABLE_FOOTNOTES
-            | Options::ENABLE_STRIKETHROUGH
-            | Options::ENABLE_TABLES
-            | Options::ENABLE_TASKLISTS
-            | Options::ENABLE_SMART_PUNCTUATION
-            | Options::ENABLE_HEADING_ATTRIBUTES
-            | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS
-            | Options::ENABLE_OLD_FOOTNOTES
-            | Options::ENABLE_MATH
-            | Options::ENABLE_SUPERSCRIPT
-            | Options::ENABLE_SUBSCRIPT;
-        let mut parser = pulldown_cmark::Parser::new_ext(&file_contents, options);
-
-        // First extract the frontmatter from the parser
-        let frontmatter = get_frontmatter(&mut parser)?;
-
-        let body = {
-            let mut out = String::with_capacity(1024);
-            write_html_fmt(&mut out, parser)?;
-            out
-        };
-
-        let content_path = strip_leading_segment(&input_path, "content");
+        // Figure out the key in other to handle reload properly.
         // FIXME: to_string_lossy may create duplicate keys in the `page_cache`
+        let content_path = strip_leading_segment(&input_path, "content");
         let content_path_str = content_path.to_string_lossy().to_string();
         let output_path = self.build_path.join(&content_path).with_extension("html");
-        // We can calculate the resulting URL from the output path.
-        let url = content_path.with_extension("html");
-        let url = url.to_string_lossy();
 
-        let filename = input_path.file_name().unwrap().to_string_lossy();
-        let slug = {
-            let slug = input_path.file_stem().unwrap();
-            slug.to_string_lossy()
-        };
+        let mut site_page = None;
 
-        // Meta information.
-        const WPM: f64 = 175.0;
-        let word_count = {
-            // Skip frontmatter by finding content after second +++
-            let content = if let Some(first_delim) = file_contents.find("+++") {
-                if let Some(second_delim_offset) = file_contents[first_delim + 3..].find("+++") {
-                    let second_delim = first_delim + 3 + second_delim_offset;
-                    &file_contents[second_delim + 3..]
-                } else {
-                    &file_contents
-                }
-            } else {
-                &file_contents
+        // First try to get a hit in the cache.
+        if reload == false {
+            // NOTE: We do .remove here since when building the pages variable it should not include
+            // the current page.
+            site_page = self.page_cache.remove(&content_path_str);
+        }
+
+        // Here we might branch three paths
+        //
+        // 1. reload == false && site_page.is_some(), there was a page pre-cached and we only
+        //    do the templating part, which should be fairly fast
+        //
+        // 2. reload == false && site_page.is_none(), we tried using the cache by it was a miss,
+        //    load the page from disk
+        //
+        // 3. reload == true, reload the page from disk.
+        if site_page.is_none() {
+            let file_contents = fs::read_to_string(&input_path).await?;
+
+            let options = Options::ENABLE_FOOTNOTES
+                | Options::ENABLE_HEADING_ATTRIBUTES
+                | Options::ENABLE_STRIKETHROUGH
+                | Options::ENABLE_TABLES
+                | Options::ENABLE_TASKLISTS
+                | Options::ENABLE_SMART_PUNCTUATION
+                | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS
+                | Options::ENABLE_OLD_FOOTNOTES
+                | Options::ENABLE_MATH
+                | Options::ENABLE_SUPERSCRIPT
+                | Options::ENABLE_SUBSCRIPT;
+            let mut parser = pulldown_cmark::Parser::new_with_broken_link_callback(
+                &file_contents,
+                options,
+                Some(|broken_link: BrokenLink| {
+                    warn!(?broken_link, "Found broken link");
+                    None
+                }),
+            );
+
+            // First extract the frontmatter from the parser
+            let frontmatter = get_frontmatter(&mut parser)?;
+
+            let body = {
+                let mut out = String::with_capacity(1024);
+                write_html_fmt(&mut out, parser, &self.grammar_cache).await?;
+                out
             };
 
-            // Count words, filtering out pure-syntax tokens
-            content
-                .split_whitespace()
-                .filter(|word| {
-                    // Skip if word is all markdown syntax characters
-                    !word.chars().all(|c| "#+*_`[]()!-=|>".contains(c))
-                })
-                .count()
-        };
-        let reading_time = ((word_count as f64 / WPM) * 60.0).round() as usize;
+            // We can calculate the resulting URL from the output path.
+            let url = content_path.with_extension("html");
+            let url = url.to_string_lossy();
 
-        // Remove the previous one. the {{pages}} variable should have all pages but the current one.
-        _ = self.page_cache.remove(&content_path_str);
+            let filename = input_path.file_name().unwrap().to_string_lossy();
+            let slug = {
+                let slug = input_path.file_stem().unwrap();
+                slug.to_string_lossy()
+            };
 
-        let page = SitePage {
-            // NOTE: It is even worth it to cache the body here?
-            contents: body.clone(),
-            filename: filename.to_string(),
-            slug: slug.to_string(),
-            url: url.to_string(),
-            tags: frontmatter.tags.clone(),
-            title: frontmatter.title.clone(),
-            description: frontmatter.description.clone(),
-            draft: frontmatter.draft,
-            meta: context::PageMeta {
-                reading_time,
-                word_count,
-            },
+            // Meta information.
+            const WPM: f64 = 175.0;
+            let word_count = {
+                // Skip frontmatter by finding content after second +++
+                let content = if let Some(first_delim) = file_contents.find("+++") {
+                    if let Some(second_delim_offset) = file_contents[first_delim + 3..].find("+++")
+                    {
+                        let second_delim = first_delim + 3 + second_delim_offset;
+                        &file_contents[second_delim + 3..]
+                    } else {
+                        &file_contents
+                    }
+                } else {
+                    &file_contents
+                };
+
+                // Count words, filtering out pure-syntax tokens
+                content
+                    .split_whitespace()
+                    .filter(|word| {
+                        // Skip if word is all markdown syntax characters
+                        !word.chars().all(|c| "#+*_`[]()!-=|>".contains(c))
+                    })
+                    .count()
+            };
+            let reading_time = ((word_count as f64 / WPM) * 60.0).round() as usize;
+
+            // Remove the previous one. the {{pages}} variable should have all pages but the current one.
+            _ = self.page_cache.remove(&content_path_str);
+
+            site_page = Some(SitePage {
+                // NOTE: It is even worth it to cache the body here?
+                contents: body.clone(),
+                filename: filename.to_string(),
+                slug: slug.to_string(),
+                url: url.to_string(),
+                frontmatter,
+                meta: context::PageMeta {
+                    reading_time,
+                    word_count,
+                },
+            });
+        }
+
+        let Some(page) = site_page else {
+            bail!("failed to load page");
         };
+
         let pages = self.page_cache.values().map(Into::into).collect();
 
         let context = context::Context {
@@ -280,7 +335,7 @@ impl Compiler {
             build: &self.build_ctx,
         };
 
-        let template = match &frontmatter.template {
+        let template = match &page.frontmatter.template {
             Some(name) => {
                 if let Ok(requested) = self.templates.get_template(name).await {
                     requested
@@ -318,7 +373,10 @@ impl Compiler {
 
         let templates_dir = self.root.join("templates");
         self.templates = Templates::new(templates_dir).await?;
-        self.compile_all().await?;
+
+        // Here he don't have to reload the markdown content since only the templates changed.
+        let root = self.root.clone();
+        self.recompile_pages(&root, false).await?;
 
         Ok(())
     }
@@ -340,15 +398,8 @@ pub struct SitePage {
     pub slug: String,
     /// The URL of this page.
     pub url: String,
-    /// The tags of this page. Set in the frontmatter.
-    // FIXME: Allocation here.
-    pub tags: Vec<String>,
-    /// The title of this page. Set in the frontmatter.
-    pub title: String,
-    /// The description of this page. Set in the frontmatter.
-    pub description: Option<String>,
-    /// Whether this page is still a draft.
-    pub draft: bool,
+    /// The frontmatter of this page.
+    pub frontmatter: Frontmatter,
     /// Meta information about this page.
     pub meta: context::PageMeta,
 }
@@ -360,17 +411,17 @@ impl<'ctx> Into<context::Page<'ctx>> for &'ctx SitePage {
             filename: &self.filename,
             slug: &self.slug,
             url: &self.url,
-            tags: self.tags.clone(), // FIXME: Clone
-            title: &self.title,
-            description: self.description.as_ref().map(|s| s.as_ref()),
-            draft: self.draft,
+            tags: self.frontmatter.tags.clone(), // FIXME: Clone
+            title: &self.frontmatter.title,
+            description: self.frontmatter.description.as_ref().map(|s| s.as_ref()),
+            draft: self.frontmatter.draft,
             meta: self.meta,
         }
     }
 }
 
-fn get_frontmatter<'src>(
-    parser: &mut pulldown_cmark::Parser<'src>,
+fn get_frontmatter<'src, F: BrokenLinkCallback<'src>>(
+    parser: &mut pulldown_cmark::Parser<'src, F>,
 ) -> eyre::Result<frontmatter::Frontmatter> {
     let first_event = parser.next().ok_or_else(|| eyre!("missing frontmatter"))?;
 

@@ -9,9 +9,10 @@
 use std::collections::HashMap;
 
 use pulldown_cmark::CowStr;
-use pulldown_cmark::Event::*;
 use pulldown_cmark::{Alignment, BlockQuoteKind, CodeBlockKind, Event, LinkType, Tag, TagEnd};
 use pulldown_cmark_escape::{FmtWriter, StrWrite, escape_href, escape_html, escape_html_body_text};
+
+use crate::highlighter::{self, GrammarCache};
 
 enum TableState {
     Head,
@@ -30,6 +31,9 @@ struct HtmlWriter<'a, I, W> {
     /// Whether if inside a metadata block (text should not be written)
     in_non_writing_block: bool,
 
+    /// The grammar registry/cache.
+    grammar_cache: Option<&'a GrammarCache>,
+
     table_state: TableState,
     table_alignments: Vec<Alignment>,
     table_cell_index: usize,
@@ -47,10 +51,18 @@ where
             writer,
             end_newline: true,
             in_non_writing_block: false,
+            grammar_cache: None,
             table_state: TableState::Head,
             table_alignments: vec![],
             table_cell_index: 0,
             numbers: HashMap::new(),
+        }
+    }
+
+    fn with_grammar_cache(self, grammar_cache: &'a GrammarCache) -> Self {
+        Self {
+            grammar_cache: Some(grammar_cache),
+            ..self
         }
     }
 
@@ -73,11 +85,12 @@ where
         Ok(())
     }
 
-    fn run(mut self) -> Result<(), W::Error> {
+    async fn run(mut self) -> Result<(), W::Error> {
+        use pulldown_cmark::Event::*;
         while let Some(event) = self.iter.next() {
             match event {
                 Start(tag) => {
-                    self.start_tag(tag)?;
+                    self.start_tag(tag).await?;
                 }
                 End(tag) => {
                     self.end_tag(tag)?;
@@ -140,7 +153,7 @@ where
     }
 
     /// Writes the start of an HTML tag.
-    fn start_tag(&mut self, tag: Tag<'a>) -> Result<(), W::Error> {
+    async fn start_tag(&mut self, tag: Tag<'a>) -> Result<(), W::Error> {
         match tag {
             Tag::HtmlBlock => Ok(()),
             Tag::Paragraph => {
@@ -240,12 +253,12 @@ where
                 if !self.end_newline {
                     self.write_newline()?;
                 }
-                match info {
+                match &info {
                     CodeBlockKind::Fenced(info) => {
                         let lang = info.split(' ').next().unwrap();
                         self.write("<div class=codeblock>")?;
                         if lang.is_empty() {
-                            self.write("<pre><code>")
+                            self.write("<pre><code>")?;
                         } else {
                             self.write("<p class=language-name>")?;
                             escape_html(&mut self.writer, lang)?;
@@ -253,11 +266,41 @@ where
 
                             self.write("<pre><code class=\"")?;
                             escape_html(&mut self.writer, lang)?;
-                            self.write("\">")
+                            self.write("\">")?;
                         }
                     }
-                    CodeBlockKind::Indented => self.write("<div class=codeblock><pre><code>"),
+                    CodeBlockKind::Indented => self.write("<div class=codeblock><pre><code>")?,
                 }
+
+                // In order to do tree-sitter highlighting, we first have to load all the languages here.
+                let mut code_buf = String::new();
+                loop {
+                    let event = self.iter.next().expect("codeblock ended prematurely");
+                    match event {
+                        Event::Text(text) => code_buf.push_str(&*text),
+                        Event::End(TagEnd::CodeBlock) => break,
+                        _ => unreachable!("inside codeblock"),
+                    }
+                }
+
+                let mut contents = None;
+
+                if let CodeBlockKind::Fenced(info) = info {
+                    let lang = info.split(' ').next().unwrap();
+                    if let Some(grammars) = self.grammar_cache.as_mut() {
+                        let grammar = grammars.load(lang).await;
+                        if let Ok(grammar) = grammar {
+                            match highlighter::highlight(&code_buf, grammar, grammars) {
+                                Ok(rendered) => contents = Some(rendered),
+                                Err(err) => warn!(?err, "failed to highlight codeblock"),
+                            }
+                        }
+                    }
+                }
+
+                let contents = contents.unwrap_or(code_buf);
+                self.write(&contents)?;
+                self.write("</code></pre></div>\n")
             }
             Tag::List(Some(1)) => {
                 if self.end_newline {
@@ -466,6 +509,7 @@ where
 
     // run raw text, consuming end tag
     fn raw_text(&mut self) -> Result<(), W::Error> {
+        use pulldown_cmark::Event::*;
         let mut nest = 0;
         while let Some(event) = self.iter.next() {
             match event {
@@ -509,10 +553,17 @@ where
     }
 }
 
-pub fn write_html_fmt<'a, I, W>(writer: W, iter: I) -> std::fmt::Result
+pub async fn write_html_fmt<'a, I, W>(
+    writer: W,
+    iter: I,
+    grammar_cache: &'a GrammarCache,
+) -> std::fmt::Result
 where
     I: Iterator<Item = Event<'a>>,
     W: std::fmt::Write,
 {
-    HtmlWriter::new(iter, FmtWriter(writer)).run()
+    HtmlWriter::new(iter, FmtWriter(writer))
+        .with_grammar_cache(grammar_cache)
+        .run()
+        .await
 }
