@@ -82,6 +82,8 @@ fn main() -> eyre::Result<()> {
             }
             Command::Serve { port } => {
                 let port = port.unwrap_or(7272);
+                let mut config = config;
+                config.base_url = format!("http://localhost:{port}");
                 server::run(root, config, port).await
             }
             Command::BuildGrammars { jobs } => {
