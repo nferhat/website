@@ -3,6 +3,8 @@
 //! These are the possible variables you can use when doing substitution inside the liquid template
 //! engine. Mostly inspired by what Jekyll and Shopify propose in their liquid template engines.
 
+use std::collections::HashSet;
+
 // NOTE: We only need to serialize these things
 use serde::Serialize;
 
@@ -10,6 +12,8 @@ use serde::Serialize;
 pub struct Site {
     /// The base URL of this website.
     pub base_url: String,
+    /// All the tags from all the pages of the website.
+    pub all_tags: HashSet<String>,
 }
 
 #[derive(Serialize)]

@@ -88,6 +88,7 @@ impl Compiler {
         let config = Arc::clone(config);
         let site_ctx = context::Site {
             base_url: config.base_url.clone(),
+            all_tags: Default::default(),
         };
 
         // NOTE: Here we don't set a style.css because we don't care much about it.
@@ -346,6 +347,7 @@ impl Compiler {
             bail!("failed to load page");
         };
 
+        self.site_ctx.all_tags.extend(page.frontmatter.tags.clone());
         let pages = self.page_cache.values().map(Into::into).collect();
 
         let context = context::Context {
