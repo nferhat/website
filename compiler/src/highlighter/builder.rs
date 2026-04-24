@@ -96,20 +96,36 @@ async fn fetch_grammar(config: &config::Grammar, out_dir: impl AsRef<Path>) -> R
             .context("failed to remove outdated grammar directory")?;
     }
 
-    // Clone the repository
+    // Clone the repository with shallow clone to minimize bandwidth
     git(
         Path::new("."),
-        &["clone", &repo_url, &out_dir.to_string_lossy()],
+        &[
+            "clone",
+            "--depth",
+            "1",
+            &repo_url,
+            &out_dir.to_string_lossy(),
+        ],
     )
     .await
     .context("failed to clone repository")?;
 
     // Checkout the specific revision
-    git(&out_dir, &["checkout", &rev])
-        .await
-        .context("failed to checkout revision")?;
-
-    Ok(())
+    match git(&out_dir, &["checkout", &rev]).await {
+        Ok(_) => Ok(()),
+        Err(_) => {
+            // If checkout fails, the revision might not be in the shallow clone,
+            // so fetch it specifically
+            debug!(%rev, "revision not in shallow clone, fetching it");
+            git(&out_dir, &["fetch", "--depth", "1", "origin", &rev])
+                .await
+                .context("failed to fetch specific revision")?;
+            git(&out_dir, &["checkout", &rev])
+                .await
+                .map(|_| ())
+                .context("failed to checkout revision after fetch")
+        }
+    }
 }
 
 // A wrapper around 'git' commands which returns stdout in success and a
