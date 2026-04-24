@@ -130,7 +130,9 @@ impl Compiler {
     /// any cached page from incremental compilation.
     pub async fn compile_all(&mut self) -> eyre::Result<()> {
         self.recompile_stylesheets().await?;
-        self.recompile_pages(self.root.clone(), true).await?;
+        let dir = self.root.join(&self.config.content_dir);
+        self.recompile_pages(&dir, false).await?;
+
         Ok(())
     }
 
@@ -375,8 +377,8 @@ impl Compiler {
         self.templates = Templates::new(templates_dir).await?;
 
         // Here he don't have to reload the markdown content since only the templates changed.
-        let root = self.root.clone();
-        self.recompile_pages(&root, false).await?;
+        let dir = self.root.join(&self.config.content_dir);
+        self.recompile_pages(&dir, false).await?;
 
         Ok(())
     }
