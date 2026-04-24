@@ -3,6 +3,7 @@
 //! This code wraps a bunch of APIs from tree-sitter, and loads parsers and queries from a configuration
 //! file. It also caches them nicely if already seen before.
 
+use std::fmt::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::{collections::HashMap, path::PathBuf};
@@ -41,7 +42,7 @@ impl GrammarCache {
     ///    when to inject them, the source from which their grammar should be fetched from...
     /// - `<languages_dir>/<lang-name>/*.scm` - the queries
     ///
-    /// The build results will be found inside `<languages_dir>/build/<lang-name>.so`.
+    /// The build results will be found inside `<languages_dir>/_build/<lang-name>.so`.
     pub async fn new(languages_dir: impl AsRef<Path>) -> Result<Self> {
         let languages_dir = languages_dir.as_ref().to_path_buf();
         let theme = load_theme(&languages_dir.join("theme.toml")).await?;
@@ -66,7 +67,7 @@ impl GrammarCache {
         }
 
         // Check if the compiled grammar exists in the build directory
-        let build_dir = self.languages_dir.join("build");
+        let build_dir = self.languages_dir.join("_build");
         let so_path = build_dir.join(format!("{}.so", name));
 
         let grammar_dir = self.languages_dir.join(name);
