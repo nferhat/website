@@ -130,8 +130,8 @@ async fn watch_for_changes(
                     }
                 }
             } else if is_style(&path) {
-                trace!(?path, "Triggering stylesheets rebuild due to path change");
-                match compiler.recompile_stylesheets().await {
+                trace!(?path, "Triggering site rebuild due to style change change");
+                match compiler.compile_all().await {
                     Ok(()) => {
                         reload_sender.send(()).ok();
                         info!("Rebuilt stylesheets")

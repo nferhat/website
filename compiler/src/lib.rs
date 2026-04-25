@@ -7,6 +7,7 @@
 #[macro_use]
 extern crate tracing;
 
+mod assets;
 mod config;
 mod frontmatter;
 mod generator;
@@ -31,6 +32,7 @@ pub use config::{BlogConfig, Config, Error as ConfigError, StylingConfig};
 pub use generator::write_html_fmt;
 pub use style::compile_to_stylesheet;
 
+use assets::AssetRegistry;
 use frontmatter::Frontmatter;
 use highlighter::GrammarCache;
 use templates::{Templates, context};
@@ -49,6 +51,12 @@ pub struct Compiler {
 
     /// The templates for this website.
     templates: Templates,
+
+    /// The asset registry for this website.
+    ///
+    /// Whenever the contents reference an actual file, we read it, cache it by content-hash, and then
+    /// send it to the assets directory.
+    asset_registry: AssetRegistry,
 
     /// The grammar cache/registry for this website.
     ///
@@ -96,6 +104,11 @@ impl Compiler {
             stylesheet_link: String::from("/style.css"),
         };
 
+        // NOTE: For now the assets live in the same place as the content does.
+        // So for example if a user references /image.png, the asset loader will try to load such asset from
+        // <content-dir>/image.png.
+        let asset_registry = AssetRegistry::new(root.join("content"), root.join("dist"));
+
         let languages_dir = root.join("languages");
         let grammar_cache = GrammarCache::new(&languages_dir).await?;
 
@@ -105,9 +118,10 @@ impl Compiler {
             config,
 
             templates,
-
             site_ctx,
             build_ctx,
+
+            asset_registry,
 
             grammar_cache,
             page_cache: HashMap::new(),
@@ -160,7 +174,17 @@ impl Compiler {
                         continue 'entries;
                     }
 
-                    self.recompile_page(path, reload).await?;
+                    let Some(extension) = path.extension() else {
+                        // We need extension to check.
+                        continue 'entries;
+                    };
+
+                    if matches!(
+                        &*extension.to_string_lossy(),
+                        "md" | "markdown" | "mdown" | "MD"
+                    ) {
+                        self.recompile_page(path, reload).await?;
+                    }
                 }
             }
         }
@@ -283,7 +307,14 @@ impl Compiler {
 
             let body = {
                 let mut out = String::with_capacity(1024);
-                write_html_fmt(&mut out, parser, &self.grammar_cache).await?;
+                write_html_fmt(
+                    &mut out,
+                    parser,
+                    &input_path,
+                    &self.grammar_cache,
+                    &self.asset_registry,
+                )
+                .await?;
                 out
             };
 

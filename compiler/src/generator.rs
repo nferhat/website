@@ -7,11 +7,13 @@
 // TODO: Simplify this, I don't need all the generics and all, I just copied it straight from there.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use pulldown_cmark::CowStr;
 use pulldown_cmark::{Alignment, BlockQuoteKind, CodeBlockKind, Event, LinkType, Tag, TagEnd};
 use pulldown_cmark_escape::{FmtWriter, StrWrite, escape_href, escape_html, escape_html_body_text};
 
+use crate::assets::AssetRegistry;
 use crate::highlighter::{self, GrammarCache};
 
 enum TableState {
@@ -24,6 +26,8 @@ struct HtmlWriter<'a, I, W> {
     iter: I,
     /// Writer to write to.
     writer: W,
+    /// The source file from where the html is rendered from.
+    source_path: PathBuf,
 
     /// Whether or not the last write wrote a newline.
     end_newline: bool,
@@ -31,8 +35,11 @@ struct HtmlWriter<'a, I, W> {
     /// Whether if inside a metadata block (text should not be written)
     in_non_writing_block: bool,
 
+    /// The asset registry. This is what's requested in order to load assets properly.
+    asset_registry: &'a AssetRegistry,
+
     /// The grammar registry/cache.
-    grammar_cache: Option<&'a GrammarCache>,
+    grammar_cache: &'a GrammarCache,
 
     table_state: TableState,
     table_alignments: Vec<Alignment>,
@@ -45,24 +52,25 @@ where
     I: Iterator<Item = Event<'a>>,
     W: StrWrite,
 {
-    fn new(iter: I, writer: W) -> Self {
+    fn new(
+        iter: I,
+        writer: W,
+        source_path: PathBuf,
+        grammar_cache: &'a GrammarCache,
+        asset_registry: &'a AssetRegistry,
+    ) -> Self {
         Self {
             iter,
             writer,
+            source_path,
             end_newline: true,
             in_non_writing_block: false,
-            grammar_cache: None,
+            grammar_cache,
+            asset_registry,
             table_state: TableState::Head,
             table_alignments: vec![],
             table_cell_index: 0,
             numbers: HashMap::new(),
-        }
-    }
-
-    fn with_grammar_cache(self, grammar_cache: &'a GrammarCache) -> Self {
-        Self {
-            grammar_cache: Some(grammar_cache),
-            ..self
         }
     }
 
@@ -287,13 +295,11 @@ where
 
                 if let CodeBlockKind::Fenced(info) = info {
                     let lang = info.split(' ').next().unwrap();
-                    if let Some(grammars) = self.grammar_cache.as_mut() {
-                        let grammar = grammars.load(lang).await;
-                        if let Ok(grammar) = grammar {
-                            match highlighter::highlight(&code_buf, grammar, grammars) {
-                                Ok(rendered) => contents = Some(rendered),
-                                Err(err) => warn!(?err, "failed to highlight codeblock"),
-                            }
+                    let grammar = self.grammar_cache.load(lang).await;
+                    if let Ok(grammar) = grammar {
+                        match highlighter::highlight(&code_buf, grammar, self.grammar_cache) {
+                            Ok(rendered) => contents = Some(rendered),
+                            Err(err) => warn!(?err, "failed to highlight codeblock"),
                         }
                     }
                 }
@@ -392,7 +398,21 @@ where
                 title,
                 id: _,
             } => {
+                self.write("<div class=image-container>")?;
                 self.write("<img src=\"")?;
+                // HACK: If image is from the web don't touch it.
+                // I should find a better way to determine if an image should be from us (IE asset)
+                // or not. Whatever.
+                let dest_url = if dest_url.starts_with("http") || dest_url.starts_with("https") {
+                    dest_url.to_string()
+                } else {
+                    // Try to load from asset registry or just bail out and use what the user asks
+                    // for. I don't know how to make it better right now.
+                    self.asset_registry
+                        .load(&*dest_url, &self.source_path)
+                        .await
+                        .unwrap_or_else(|_| dest_url.to_string())
+                };
                 escape_href(&mut self.writer, &dest_url)?;
                 self.write("\" alt=\"")?;
                 self.raw_text()?;
@@ -400,7 +420,15 @@ where
                     self.write("\" title=\"")?;
                     escape_html(&mut self.writer, &title)?;
                 }
-                self.write("\" />")
+                self.write("\" />")?;
+
+                if !title.is_empty() {
+                    self.write("<span class=image-title>")?;
+                    escape_html(&mut self.writer, &title)?;
+                    self.write("</span>")?;
+                }
+
+                self.write("</div>")
             }
             Tag::FootnoteDefinition(name) => {
                 if self.end_newline {
@@ -556,14 +584,21 @@ where
 pub async fn write_html_fmt<'a, I, W>(
     writer: W,
     iter: I,
+    source_path: &Path,
     grammar_cache: &'a GrammarCache,
+    asset_registry: &'a AssetRegistry,
 ) -> std::fmt::Result
 where
     I: Iterator<Item = Event<'a>>,
     W: std::fmt::Write,
 {
-    HtmlWriter::new(iter, FmtWriter(writer))
-        .with_grammar_cache(grammar_cache)
-        .run()
-        .await
+    HtmlWriter::new(
+        iter,
+        FmtWriter(writer),
+        source_path.to_owned(),
+        grammar_cache,
+        asset_registry,
+    )
+    .run()
+    .await
 }
