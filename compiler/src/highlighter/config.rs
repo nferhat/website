@@ -30,6 +30,8 @@ impl<'de> Deserialize<'de> for Theme {
     }
 }
 
+crate::derive_config_load!(Theme, "highlighter theme");
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Style {
@@ -54,3 +56,5 @@ pub struct Grammar {
     /// [tree-sitter-comment](https://github.com/stewsd/tree-sitter-comment).
     pub subdir: Option<String>,
 }
+
+crate::derive_config_load!(Grammar, "grammar");

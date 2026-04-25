@@ -18,7 +18,6 @@ mod utils;
 use std::{
     collections::HashMap,
     path::{self, Path, PathBuf},
-    sync::Arc,
 };
 
 use eyre::{Context, bail, eyre};
@@ -43,7 +42,7 @@ pub struct Compiler {
     /// relative to this path.
     root: PathBuf,
     /// Website configuration
-    config: Arc<Config>,
+    config: Config,
     // Pre-cache some paths here because we are going to use them a lot.
     #[allow(unused)]
     build_path: PathBuf,
@@ -76,7 +75,7 @@ pub struct Compiler {
 }
 
 impl Compiler {
-    pub async fn new(root: impl AsRef<Path>, config: &Arc<Config>) -> eyre::Result<Self> {
+    pub async fn new(root: impl AsRef<Path>, config: Config) -> eyre::Result<Self> {
         let root = path::absolute(root)?;
 
         let build_path = root.join("dist");
@@ -85,7 +84,6 @@ impl Compiler {
         let templates = Templates::new(&templates_dir).await?;
 
         // Create and cache contexts here.
-        let config = Arc::clone(config);
         let site_ctx = context::Site {
             base_url: config.base_url.clone(),
             all_tags: Default::default(),
@@ -399,6 +397,52 @@ impl Compiler {
         // Here he don't have to reload the markdown content since only the templates changed.
         let dir = self.root.join(&self.config.content_dir);
         self.recompile_pages(&dir, false).await?;
+
+        Ok(())
+    }
+
+    /// Reloads the compiler configs
+    pub async fn reload_configs(&mut self, path: &Path) -> eyre::Result<()> {
+        // First the main website config
+        let filename = path.file_name().unwrap().to_string_lossy();
+
+        match filename.trim() {
+            "website.toml" => {
+                info!("Reloading website configuration");
+                let config = Config::load_async(self.root.join("website.toml")).await?;
+                self.config = Config {
+                    // HACK: Keep the base URL untouched since we might enter the case where the server changed it to
+                    // localhost:{port}. If we are just building the website, `reload_configs()` will never be called
+                    base_url: self.config.base_url.clone(),
+                    ..config
+                };
+
+                return Ok(());
+            }
+            "theme.toml" => {
+                self.grammar_cache.reload_theme().await?;
+                // Needed since we rely on the theme for keyword definitions.
+                self.recompile_stylesheets().await?;
+                return Ok(());
+            }
+            "config.toml" if let Some(grammar_dir) = path.parent() => {
+                // We are potentially reloading a grammar in the form of
+                //      languages/<name>/config.toml
+                if let Some(parent_of_parent) = grammar_dir.parent() {
+                    let parent_of_parent = parent_of_parent.file_name();
+                    // Check if the parent of the grammar_dir is the languages dir.
+                    if parent_of_parent.is_some_and(|p| p == "languages") {
+                        let grammar_id = grammar_dir.file_name().unwrap().to_string_lossy();
+                        info!(%grammar_id, "Reloading grammar");
+                        self.grammar_cache.reload_grammar(&*grammar_id).await?;
+                        return Ok(());
+                    }
+                }
+            }
+            _ => warn!(?path, "Unknown configuration file"), // unknown config
+        }
+
+        self.compile_all().await?;
 
         Ok(())
     }

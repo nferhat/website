@@ -26,15 +26,7 @@ pub async fn build_grammar(grammar_id: &str, languages_dir: &Path) -> Result<con
     }
 
     let config_file_path = grammar_dir.join("config.toml");
-    if !config_file_path.is_file() {
-        bail!("language config path does not exist")
-    }
-
-    let config_file_contents = fs::read_to_string(&config_file_path)
-        .await
-        .context("failed to read language config file path")?;
-    let config: config::Grammar =
-        toml::de::from_str(&config_file_contents).context("invalid language config")?;
+    let config = config::Grammar::load_async(&config_file_path).await?;
 
     // FIXME: Refetch if newer/whatnot.
     let build_dir = languages_dir.join("_build");

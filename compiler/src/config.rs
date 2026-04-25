@@ -1,6 +1,6 @@
 //! The configuration for the server
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -32,15 +32,7 @@ pub struct Config {
     pub blog: BlogConfig,
 }
 
-impl Config {
-    pub fn load(path: impl AsRef<Path>) -> Result<Config, Error> {
-        let path = path.as_ref();
-        debug!(?path, "Loading website configuration");
-        let contents = std::fs::read_to_string(path)?;
-        let config = toml::from_str(&contents)?;
-        Ok(config)
-    }
-}
+crate::derive_config_load!(Config, "website");
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]

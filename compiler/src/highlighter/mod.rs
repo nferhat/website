@@ -45,7 +45,7 @@ impl GrammarCache {
     /// The build results will be found inside `<languages_dir>/_build/<lang-name>.so`.
     pub async fn new(languages_dir: impl AsRef<Path>) -> Result<Self> {
         let languages_dir = languages_dir.as_ref().to_path_buf();
-        let theme = load_theme(&languages_dir.join("theme.toml")).await?;
+        let theme = Theme::load_async(&languages_dir.join("theme.toml")).await?;
 
         Ok(GrammarCache {
             languages_dir,
@@ -79,18 +79,11 @@ impl GrammarCache {
         // FIXME: Check if it needs recompile, but the user can just rm the parser dir and whatnot.
         let _config = if !so_path.exists() {
             debug!(?name, "building language grammar...");
-            builder::build_grammar(name, &self.languages_dir).await?
+            builder::build_grammar(name, &self.languages_dir).await
         } else {
             let config_file_path = grammar_dir.join("config.toml");
-            if !config_file_path.is_file() {
-                bail!("language config path does not exist")
-            }
-
-            let config_file_contents = fs::read_to_string(&config_file_path)
-                .await
-                .context("failed to read language config file path")?;
-            toml::de::from_str(&config_file_contents).context("invalid language config")?
-        };
+            config::Grammar::load_async(&config_file_path).await
+        }?;
 
         // Load the HighlightConfiguration from the .so file and query files
         let mut config = Self::load_highlight_configuration(name, &so_path, &self.languages_dir)
@@ -198,6 +191,20 @@ impl GrammarCache {
 
         Ok(out)
     }
+
+    /// Reloads the [`Theme`] used to highlight things.
+    pub async fn reload_theme(&mut self) -> Result<()> {
+        self.theme = Theme::load_async(&self.languages_dir.join("theme.toml")).await?;
+        Ok(())
+    }
+
+    /// Reloads a given grammar config
+    pub async fn reload_grammar(&mut self, name: &str) -> Result<()> {
+        let name = name.to_string(); // FIXME: Alloc
+        self.cache.lock().await.remove_entry(&name);
+        self.load(&name).await?;
+        Ok(())
+    }
 }
 
 /// Highlights the given `source_code` with the specified `grammar`.
@@ -230,13 +237,4 @@ pub fn highlight(
 
     let highlighted_lines = renderer.lines().collect::<Vec<_>>();
     Ok(highlighted_lines.join(""))
-}
-
-/// Loads the highlighter [`Theme`]
-async fn load_theme(path: &Path) -> Result<Theme> {
-    let theme_file_contents = fs::read_to_string(path)
-        .await
-        .context("failed to read theme file")?;
-    let theme = toml::de::from_str(&theme_file_contents).context("invalid theme file")?;
-    Ok(theme)
 }

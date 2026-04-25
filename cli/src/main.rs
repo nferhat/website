@@ -73,8 +73,7 @@ fn main() -> eyre::Result<()> {
     rt.block_on(async move {
         match cli.command {
             Command::Build => {
-                let config = Arc::new(config);
-                let mut compiler = Compiler::new(root.clone().into_boxed_path(), &config)
+                let mut compiler = Compiler::new(root.clone().into_boxed_path(), config)
                     .await
                     .context("failed to init compiler")?;
                 compiler.compile_all().await?;

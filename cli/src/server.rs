@@ -7,7 +7,6 @@ use std::convert::Infallible;
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::State;
@@ -28,8 +27,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 pub async fn run(root: PathBuf, config: Config, port: u16) -> eyre::Result<()> {
-    let config = Arc::new(config);
-    let mut compiler = Compiler::new(root.clone().into_boxed_path(), &config)
+    let mut compiler = Compiler::new(root.clone().into_boxed_path(), config)
         .await
         .context("failed to init compiler")?;
     // Hot-reloading and whatnot
@@ -121,7 +119,17 @@ async fn watch_for_changes(
         }
 
         for path in event.paths {
-            if is_style(&path) {
+            if is_config(&path) {
+                match compiler.reload_configs(&path).await {
+                    Ok(()) => {
+                        reload_sender.send(()).ok();
+                    }
+                    Err(err) => {
+                        warn!(?err, "Failed to reload website config");
+                        continue;
+                    }
+                }
+            } else if is_style(&path) {
                 trace!(?path, "Triggering stylesheets rebuild due to path change");
                 match compiler.recompile_stylesheets().await {
                     Ok(()) => {
@@ -183,8 +191,16 @@ fn is_markdown(p: &Path) -> bool {
     ext == "md" || ext == "markdown" || ext == "mdown"
 }
 
+fn is_config(p: &Path) -> bool {
+    let Some(ext) = p.extension() else {
+        return false;
+    };
+
+    ext == "toml"
+}
+
 async fn serve(tx: broadcast::Sender<()>, path: &Path, port: u16) -> eyre::Result<()> {
-    let aggressive_caching_layer = SetResponseHeaderLayer::overriding(
+    let aggressive_caching_layer = SetResponseHeaderLayer::if_not_present(
         CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=31536000, immutable"),
     );

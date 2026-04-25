@@ -89,3 +89,28 @@ pub fn random_string(len: usize) -> String {
         .map(char::from)
         .collect()
 }
+
+#[macro_export]
+macro_rules! derive_config_load {
+    ($type:ty, $name:expr) => {
+        impl $type {
+            #[allow(unused)]
+            pub fn load(path: impl AsRef<std::path::Path>) -> eyre::Result<$type> {
+                let path = path.as_ref();
+                debug!(?path, "Loading {} configuration", $name);
+                let contents = std::fs::read_to_string(path)?;
+                let config = toml::from_str(&contents)?;
+                Ok(config)
+            }
+
+            #[allow(unused)]
+            pub async fn load_async(path: impl AsRef<std::path::Path>) -> eyre::Result<$type> {
+                let path = path.as_ref();
+                debug!(?path, "Loading {} configuration", $name);
+                let contents = tokio::fs::read_to_string(path).await?;
+                let config = toml::from_str(&contents)?;
+                Ok(config)
+            }
+        }
+    };
+}
