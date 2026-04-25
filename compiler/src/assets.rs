@@ -85,13 +85,55 @@ impl AssetRegistry {
 
             write!(&mut filename, ".{extension}")?;
 
-            // FIXME: For now I don't have any way to invalidate the cache.
-
             // Now copy the file over.
             let output_path_final = self.build_dir.join("static").join(&filename);
             fs::copy(&asset_path_real, &output_path_final).await?;
             Ok(format!("/static/{filename}"))
         }
+    }
+
+    pub async fn try_reload_asset(&mut self, path: &Path) -> Result<(bool, bool)> {
+        let Some(extension) = path.extension().map(ToOwned::to_owned) else {
+            // can't do much without an extension m8
+            return Ok((false, false));
+        };
+        let extension = extension.to_string_lossy();
+
+        let path_str = path.to_string_lossy();
+        trace!(path = %path_str, "Trying to reload asset");
+        let path = path.to_path_buf();
+        let cache = self.cache.get_mut();
+        let Some(previous_content_hash) = cache.remove(&path) else {
+            trace!(path = %path_str, "Asset not in registry");
+            return Ok((false, false)); // no an asset.
+        };
+
+        // Now do the same thing as `load` but compare caches and return if we need to rebuild.
+        let file = fs::File::open(&path).await?;
+        let mut filename = String::new();
+
+        let content_hash = content_hash(file).await?;
+        // If content hash matches no need to rebuild the site
+        if content_hash == previous_content_hash {
+            debug!(path = %path_str, "Skipping asset reloading since content hash matches");
+            return Ok((true, false));
+        }
+
+        for byte in &content_hash {
+            write!(&mut filename, "{byte:02x}")?;
+        }
+
+        debug!(path = %path_str, content_hash = %filename, "Caching asset");
+        cache.insert(path.clone(), content_hash);
+
+        write!(&mut filename, ".{extension}")?;
+
+        // FIXME: For now I don't have any way to invalidate the cache.
+
+        // Now copy the file over.
+        let output_path_final = self.build_dir.join("static").join(&filename);
+        fs::copy(&path, &output_path_final).await?;
+        Ok((true, true))
     }
 }
 

@@ -198,7 +198,7 @@ impl Compiler {
     /// to a 3rd-party library [`grass`], we cannot reliably do finer incremental compilation of styles.
     ///
     /// Plus, CSS composes over multiple files, sooooo...
-    pub async fn recompile_stylesheets(&mut self) -> eyre::Result<()> {
+    async fn recompile_stylesheets(&mut self) -> eyre::Result<()> {
         let style_input = self.root.join(&self.config.styling.root_file);
         // include the file's parent directory in the import paths
         let import_path = style_input.parent().map(ToOwned::to_owned).ok_or_else(|| {
@@ -476,6 +476,18 @@ impl Compiler {
         self.compile_all().await?;
 
         Ok(())
+    }
+
+    /// Tries reloading a given asset.
+    ///
+    /// Returns `Ok(true)` if the asset was used an in the [`AssetRegistry`]
+    pub async fn try_reload_asset(&mut self, path: &Path) -> eyre::Result<bool> {
+        let (reloaded, needs_rebuild) = self.asset_registry.try_reload_asset(path).await?;
+        if needs_rebuild {
+            self.compile_all().await?;
+        }
+
+        Ok(reloaded)
     }
 }
 

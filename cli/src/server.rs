@@ -154,19 +154,26 @@ async fn watch_for_changes(
                         continue;
                     }
                 }
-            } else {
-                if path.to_string_lossy().contains("templates") {
-                    trace!(?path, "Reloading website templates");
-                    // FIXME: Incremental recompilation for single pages
-                    match compiler.reload_template(&path).await {
-                        Ok(_) => info!(?path, "Reloaded template"),
-                        Err(err) => {
-                            warn!(?err, "Failed to reload templates");
-                            continue;
-                        }
+            } else if path.to_string_lossy().contains("templates") {
+                trace!(?path, "Reloading website templates");
+                // FIXME: Incremental recompilation for single pages
+                match compiler.reload_template(&path).await {
+                    Ok(_) => info!(?path, "Reloaded template"),
+                    Err(err) => {
+                        warn!(?err, "Failed to reload templates");
+                        continue;
                     }
+                }
 
-                    reload_sender.send(()).ok();
+                reload_sender.send(()).ok();
+            } else if path.to_string_lossy().contains("content") {
+                match compiler.try_reload_asset(&path).await {
+                    Ok(true) => {
+                        reload_sender.send(()).ok();
+                        info!(?path, "Reloaded asset")
+                    }
+                    Ok(false) => (), // not referenced in any pages asset.
+                    Err(err) => warn!(?err, "failed to reload asset"), // ehh, whatev
                 }
             }
         }
