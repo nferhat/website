@@ -10,8 +10,6 @@ use std::path::{Path, PathBuf};
 
 use axum::Router;
 use axum::extract::State;
-use axum::http::HeaderValue;
-use axum::http::header::CACHE_CONTROL;
 use axum::response::sse::Event as SseEvent;
 use axum::response::{IntoResponse, Sse};
 use compiler::{Compiler, Config};
@@ -23,7 +21,6 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
-use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 pub async fn run(root: PathBuf, config: Config, port: u16) -> eyre::Result<()> {
@@ -38,10 +35,12 @@ pub async fn run(root: PathBuf, config: Config, port: u16) -> eyre::Result<()> {
         .await
         .context("failed to run initial build")?;
 
+    let static_assets_path = root.join("static");
+
     let (reload_sender, _) = broadcast::channel::<()>(32);
     let build_dir = root.join("dist");
     _ = tokio::join!(
-        serve(reload_sender.clone(), &build_dir, port),
+        serve(reload_sender.clone(), &build_dir, &static_assets_path, port),
         watch_for_changes(&root, compiler, reload_sender.clone())
     );
 
@@ -206,26 +205,25 @@ fn is_config(p: &Path) -> bool {
     ext == "toml"
 }
 
-async fn serve(tx: broadcast::Sender<()>, path: &Path, port: u16) -> eyre::Result<()> {
-    let aggressive_caching_layer = SetResponseHeaderLayer::if_not_present(
-        CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=31536000, immutable"),
+async fn serve(
+    tx: broadcast::Sender<()>,
+    build_path: &Path,
+    static_assets_path: &Path,
+    port: u16,
+) -> eyre::Result<()> {
+    info!(?build_path, ?static_assets_path);
+    let static_assets_router: Router<()> = Router::new().fallback_service(
+        ServeDir::new(build_path.join("static")).fallback(ServeDir::new(static_assets_path)),
     );
-
-    let static_assets_router: Router<()> = Router::new()
-        .fallback_service(ServeDir::new(path.join("static")))
-        // Aggressive caching for assets. They should be cache-busted whenever they change.
-        // The compiler handles everything, from assigning them unique names and only changing them on content hash change.
-        .layer(aggressive_caching_layer);
 
     let app = Router::new()
         // Hot reloading route. We use an SSE event with some additional javascript on the client to
         // achieve this. We also include the script needed to reload.
         .route("/__reload__", axum::routing::get(reload_sse))
         .route("/reload-script.js", axum::routing::get(reload_script))
-        .nest_service("/assets/", static_assets_router)
+        .nest_service("/static/", static_assets_router)
         .layer(CompressionLayer::new())
-        .fallback_service(ServeDir::new(&path))
+        .fallback_service(ServeDir::new(&build_path))
         .with_state(tx);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
