@@ -19,3 +19,4 @@ notify = "8.2.0"
 tokio-stream = { version = "0.1.18", features = ["sync"] }
 eyre = "0.6"
 color-eyre = "0.6.5"
+dircpy = "0.3.20"

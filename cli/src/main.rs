@@ -11,6 +11,7 @@ use tokio::runtime;
 #[macro_use]
 extern crate tracing;
 
+mod build;
 mod server;
 
 #[derive(clap::Parser)]
@@ -73,10 +74,10 @@ fn main() -> eyre::Result<()> {
     rt.block_on(async move {
         match cli.command {
             Command::Build => {
-                let mut compiler = Compiler::new(root.clone().into_boxed_path(), config)
+                let compiler = Compiler::new(root.clone().into_boxed_path(), config)
                     .await
                     .context("failed to init compiler")?;
-                compiler.compile_all().await?;
+                build::compile(compiler).await?;
                 Ok(())
             }
             Command::Serve { port } => {

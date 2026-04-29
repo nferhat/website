@@ -399,7 +399,7 @@ where
                 id: _,
             } => {
                 self.write("<div class=image-container>")?;
-                self.write("<img src=\"")?;
+                self.write("<img class=clickable-image src=\"")?;
                 // HACK: If image is from the web don't touch it.
                 // I should find a better way to determine if an image should be from us (IE asset)
                 // or not. Whatever.

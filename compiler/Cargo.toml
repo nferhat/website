@@ -45,3 +45,6 @@ liquid = { version = "0.26.11", features = ["liquid-lib"] }
 
 # Asset caching/handling.
 blake3 = "1.8.5"
+
+# Font parsing/caching
+allsorts = "0.16.1"

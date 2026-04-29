@@ -20,18 +20,6 @@ root-file = "./style/style.sass"
 # This is needed if you have some SASS libraries shipped on npm
 # (I mean you shouldn't use them for something this simple but I digress)
 load-paths = []
-
-# Configuration for the blog system.
-[blog]
-# The base path where the compiler should find blogs. This affects not only where it
-# finds the markdown files but also where in the build folder it should output their
-# compiled html.
-#
-# If you set this to `articles/` and run the compiler, all .md files will be generated
-# inside `dist/articles/*.html`, with `dist/articles/index.html` being the "all articles"
-# page
-base-path = "./blog/"
-# Whether to include drafts into the "All blogs" page. Drafts are always accessible
-# (using their absolute path), however they are skipped from the listing, search, tag
-# search, etc.
-include-drafts = false
+# Fonts to bundle with the styling. These will be minified and subsetted in order to
+# have the smallest footprint possible.
+bundle-fonts = []

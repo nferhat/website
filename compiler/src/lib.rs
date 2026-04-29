@@ -9,6 +9,7 @@ extern crate tracing;
 
 mod assets;
 mod config;
+pub mod fonts;
 mod frontmatter;
 mod generator;
 pub mod highlighter;
@@ -28,7 +29,7 @@ use pulldown_cmark::{
 use tokio::{fs, io};
 use utils::to_dot_relative;
 
-pub use config::{BlogConfig, Config, Error as ConfigError, StylingConfig};
+pub use config::{Config, Error as ConfigError, StylingConfig};
 pub use generator::write_html_fmt;
 pub use style::compile_to_stylesheet;
 
@@ -364,6 +365,7 @@ impl Compiler {
                 filename: filename.to_string(),
                 slug: slug.to_string(),
                 url: url.to_string(),
+                output_path: output_path.to_string_lossy().to_string(),
                 frontmatter,
                 meta: context::PageMeta {
                     reading_time,
@@ -489,6 +491,21 @@ impl Compiler {
 
         Ok(reloaded)
     }
+
+    /// Get the compiler's [`Config`]
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    /// Get an iterator over all the [`SitePage`]s.
+    pub fn pages(&self) -> impl Iterator<Item = &SitePage> {
+        self.page_cache.values()
+    }
+
+    /// Get the [`Path`] in which the compiler puts the output.
+    pub fn build_path(&self) -> &Path {
+        &self.build_path
+    }
 }
 
 /// A blog page.
@@ -501,6 +518,8 @@ pub struct SitePage {
     pub contents: String,
     /// The original filename used for this page.
     pub filename: String,
+    /// The output path (IE generated file path) for this page.
+    pub output_path: String,
     /// The filename of a Document resource without its extension (or date prefixes for a post).
     /// For example, slug for a post at URL `/2017/02/22/my-new-post.html`, would be
     /// `my-new-post`.

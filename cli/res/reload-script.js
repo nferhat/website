@@ -7,11 +7,6 @@ const es = new EventSource("/__reload__");
 es.onmessage = (e) => {
   if (e.data === "reload") {
     window.location.reload();
-    document.querySelectorAll('link[rel="stylesheet"]').forEach((link) => {
-      const url = new URL(link.href);
-      url.searchParams.set("v", Date.now()); // cache buster
-      link.href = url.toString();
-    });
   }
 };
 
