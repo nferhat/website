@@ -30,6 +30,8 @@ pub struct Build {
 pub struct Page<'ctx> {
     /// The rendered contents of the page.
     pub contents: &'ctx str,
+    /// The release date of this page.
+    pub release_date: Option<ReleaseDate>,
     /// The original filename used for this page.
     pub filename: &'ctx str,
     /// The filename of a Document resource without its extension (or date prefixes for a post).
@@ -49,6 +51,24 @@ pub struct Page<'ctx> {
     pub draft: bool,
     /// Meta information about this page.
     pub meta: PageMeta,
+}
+
+/// A struct for marking when an article gets released.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReleaseDate {
+    pub year: i32,
+    pub month: u8,
+    pub day: u8,
+}
+
+impl From<&liquid::model::DateTime> for ReleaseDate {
+    fn from(value: &liquid::model::DateTime) -> Self {
+        Self {
+            day: value.day(),
+            month: value.month(),
+            year: value.year(),
+        }
+    }
 }
 
 #[derive(Serialize, Clone, Copy)]

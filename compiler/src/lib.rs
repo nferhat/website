@@ -379,7 +379,13 @@ impl Compiler {
         };
 
         self.site_ctx.all_tags.extend(page.frontmatter.tags.clone());
-        let pages = self.page_cache.values().map(Into::into).collect();
+        let pages = {
+            let mut pages: Vec<context::Page> = self.page_cache.values().map(Into::into).collect();
+            pages.sort_unstable_by_key(|p| p.release_date);
+            // We want newest first
+            pages.reverse();
+            pages
+        };
 
         let context = context::Context {
             page: (&page).into(),
@@ -536,6 +542,7 @@ impl<'ctx> Into<context::Page<'ctx>> for &'ctx SitePage {
     fn into(self) -> context::Page<'ctx> {
         context::Page {
             contents: &self.contents,
+            release_date: self.frontmatter.release_date.as_ref().map(Into::into),
             filename: &self.filename,
             slug: &self.slug,
             url: &self.url,
