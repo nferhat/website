@@ -1,7 +1,6 @@
 # `website` - An opinionated website builder
 
-This is `website` (yes I know, amazing name). An opinionated website statically rendered 
-website generator. In short, you give it some sort of markdown content, and it will 
+This is `website` (yes I know, amazing name). An opinionated SSG. In short, you give it some sort of markdown content, and it will 
 automatically do the following:
 
 - Read out the whole structure of your content
