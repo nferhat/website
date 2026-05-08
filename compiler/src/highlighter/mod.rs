@@ -187,6 +187,32 @@ impl GrammarCache {
                 }
             }
             write!(out, "}}")?;
+
+            // Variant with div element <kw-{hl-name}>
+            write!(&mut out, "kw[type=\"{css_highlight_name}\"] {{")?;
+            match highlight {
+                config::Style::ForegroundOnly(color) => {
+                    write!(&mut out, "color:{color}")?;
+                }
+                config::Style::Style {
+                    fg,
+                    bg,
+                    font_style,
+                    font_weight,
+                } => {
+                    write!(&mut out, "color:{fg}")?;
+                    if let Some(bg) = bg {
+                        write!(&mut out, ";background-color:{bg}")?;
+                    }
+                    if let Some(font_style) = font_style {
+                        write!(&mut out, ";font-style:{font_style}")?;
+                    }
+                    if let Some(font_weight) = font_weight {
+                        write!(&mut out, ";font_weight:{font_weight}")?;
+                    }
+                }
+            }
+            write!(out, "}}")?;
         }
 
         Ok(out)
