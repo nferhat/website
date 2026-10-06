@@ -6,6 +6,7 @@
 //! - Code blocks, which get highlighted with tree-sitter and wrapped in a `codeblock` container.
 //! - Images, which get loaded through the asset registry and wrapped in an `image-container`.
 //! - Inline code, which gets an `inline-code` class
+//! - `details` divs, which become collapsible `<details>` elements (see [`details_open`])
 //!
 //! Intercepted blocks are handed back to the renderer as raw HTML events, so it can keep track of
 //! everything else (footnotes, list tightness, indentation, ...) on its own.
@@ -13,7 +14,7 @@
 use std::fmt::{self, Write};
 use std::path::Path;
 
-use jotdown::{AttributeKind, Attributes, Container, Event, Render, html::Renderer};
+use jotdown::{AttributeKind, Attributes, Container, Event, Parser, Render, html::Renderer};
 
 use crate::assets::AssetRegistry;
 use crate::highlighter::{self, GrammarCache};
@@ -210,6 +211,83 @@ where
     out
 }
 
+/// The class of the djot div that gets rendered as a `<details>` element.
+const DETAILS_CLASS: &str = "details";
+
+/// Renders the summary of a `<details>` element as inline djot.
+///
+/// The summary is parsed on its own, and its paragraph wrapper is dropped, so that only the inline
+/// content ends up inside `<summary>`. Inline content is handled the same way as in the page body.
+async fn render_summary(
+    summary: &str,
+    grammar_cache: &GrammarCache,
+    info: &mut RenderInfo,
+) -> Result<String, fmt::Error> {
+    let mut out = String::new();
+    let mut renderer = Renderer::default();
+    let mut iter = Parser::new(summary).filter(|event| {
+        !matches!(
+            event,
+            Event::Start(Container::Paragraph, _) | Event::End(Container::Paragraph)
+        )
+    });
+
+    while let Some(event) = iter.next() {
+        match event {
+            Event::Start(Container::RawInline { format }, _)
+                if format != "html" && format != "latex" =>
+            {
+                let html = render_inline_code(&mut iter, &format, grammar_cache).await;
+                push_raw(&mut renderer, false, html, &mut out)?;
+            }
+            Event::Start(Container::Verbatim, mut attrs) => {
+                attrs.push((AttributeKind::Class, "inline-code".into()));
+                renderer.push_event(Event::Start(Container::Verbatim, attrs), &mut out)?;
+            }
+            event => {
+                if let Event::Start(Container::Math { .. }, _) = &event {
+                    info.has_math = true;
+                }
+                renderer.push_event(event, &mut out)?;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Renders the opening of a `<details>` element, up to (and including) its `<summary>`.
+///
+/// Djot has no syntax for collapsible sections, so we use a div with the `details` class, and
+/// give the summary (inline djot) and open state as attributes:
+///
+/// ```djot
+/// {summary="Click `me`" open=true}
+/// ::: details
+/// Hidden content.
+/// :::
+/// ```
+async fn details_open(
+    attrs: &Attributes<'_>,
+    grammar_cache: &GrammarCache,
+    info: &mut RenderInfo,
+) -> Result<String, fmt::Error> {
+    let summary = attrs
+        .get_value("summary")
+        .map(|summary| summary.to_string())
+        .filter(|summary| !summary.is_empty())
+        .unwrap_or_else(|| "Details".to_string());
+    let open = attrs
+        .get_value("open")
+        .is_some_and(|open| open.to_string() != "false");
+
+    let mut out = String::new();
+    out.push_str(if open { "<details open>" } else { "<details>" });
+    out.push_str("<summary>");
+    out.push_str(render_summary(&summary, grammar_cache, info).await?.trim_end());
+    out.push_str("</summary>\n");
+    Ok(out)
+}
+
 /// Information about a page, gathered while rendering it.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RenderInfo {
@@ -245,6 +323,14 @@ where
             Event::Start(Container::RawInline { format }, _) if format != "html" && format != "latex" => {
                 let html = render_inline_code(&mut iter, &format, grammar_cache).await;
                 push_raw(&mut renderer, false, html, &mut writer)?;
+            }
+            // collapsible sections: `{summary="Title"}` on top of a `::: details` div.
+            Event::Start(Container::Div { class }, attrs) if class == DETAILS_CLASS => {
+                let html = details_open(&attrs, grammar_cache, &mut info).await?;
+                push_raw(&mut renderer, true, html, &mut writer)?;
+            }
+            Event::End(Container::Div { class }) if class == DETAILS_CLASS => {
+                push_raw(&mut renderer, true, "</details>\n".to_string(), &mut writer)?;
             }
             Event::Start(Container::Verbatim, mut attrs) => {
                 attrs.push((AttributeKind::Class, "inline-code".into()));
