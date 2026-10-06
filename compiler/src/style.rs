@@ -1,7 +1,7 @@
 //! Styling using [SASS](https://sass-lang.com/)
 //!
 //! In order to easily write styling, we include SASS as part of the pipeline for compiling
-//! markdown content into HTML pages. This allows to easily define anything, and be done quickly
+//! djot content into HTML pages. This allows to easily define anything, and be done quickly
 //! with tweaking the website.
 
 use std::path::Path;

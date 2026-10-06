@@ -67,8 +67,8 @@ pub struct Compiler {
     ///
     /// Pages are cached by their original file name, stripped of the content prefix, of course.
     ///
-    /// For example, the page generated from `./content/blog/i-love-oranges.md` would be cached under
-    /// the key `blog/i-love-oranges.md`.
+    /// For example, the page generated from `./content/blog/i-love-oranges.dj` would be cached under
+    /// the key `blog/i-love-oranges.dj`.
     ///
     /// [`&BlogPage`](context::BlogPage) can easily be transformed into a [`Page`](context::Page),
     /// so it can be passed into the templating engine quickly.
@@ -396,7 +396,7 @@ impl Compiler {
         let templates_dir = self.root.join("templates");
         self.templates = Templates::new(templates_dir).await?;
 
-        // Here he don't have to reload the markdown content since only the templates changed.
+        // Here he don't have to reload the djot content since only the templates changed.
         let dir = self.root.join(&self.config.content_dir);
         self.recompile_pages(&dir, false).await?;
 

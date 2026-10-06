@@ -10,7 +10,6 @@ compiler.path = "../compiler"
 clap = { version = "4.6.0", features = ["derive"] }
 serde.workspace = true
 toml.workspace = true
-markdown.workspace = true
 axum = "0.8.8"
 tower-http = { version = "0.6.8", features = ["fs", "set-header", "trace", "compression-br"] }
 tokio.workspace = true

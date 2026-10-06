@@ -5,7 +5,7 @@
 //!
 //! Doing so will allow us to aggresively cache the content, so that browsers don't
 //! have to reload it, unless it changes. For the writer perspective, you just include some file in
-//! your markdown, and that's it really.
+//! your djot, and that's it really.
 
 use std::collections::HashMap;
 use std::fmt::Write;
