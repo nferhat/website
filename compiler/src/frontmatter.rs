@@ -45,6 +45,8 @@ pub struct Frontmatter {
     pub metadata: bool,
     /// The template used to rendering this page.
     pub template: Option<String>,
+    /// The extension of the generated file, `html` if unset. For example `xml` for a feed.
+    pub output_ext: Option<String>,
 }
 
 /// Splits the frontmatter off the top of a page.

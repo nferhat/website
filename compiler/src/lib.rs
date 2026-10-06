@@ -254,8 +254,6 @@ impl Compiler {
         // FIXME: to_string_lossy may create duplicate keys in the `page_cache`
         let content_path = strip_leading_segment(&input_path, "content");
         let content_path_str = content_path.to_string_lossy().to_string();
-        let output_path = self.build_path.join(&content_path).with_extension("html");
-
         let mut site_page = None;
 
         // First try to get a hit in the cache.
@@ -301,7 +299,8 @@ impl Compiler {
             };
 
             // We can calculate the resulting URL from the output path.
-            let url = content_path.with_extension("html");
+            let ext = frontmatter.output_ext.as_deref().unwrap_or("html");
+            let url = content_path.with_extension(ext);
             let url = url.to_string_lossy();
 
             let filename = input_path.file_name().unwrap().to_string_lossy();
@@ -328,7 +327,7 @@ impl Compiler {
                 filename: filename.to_string(),
                 slug: slug.to_string(),
                 url: url.to_string(),
-                output_path: output_path.to_string_lossy().to_string(),
+                output_path: self.build_path.join(&*url).to_string_lossy().to_string(),
                 frontmatter,
                 meta: context::PageMeta {
                     reading_time,
@@ -341,6 +340,8 @@ impl Compiler {
         let Some(page) = site_page else {
             bail!("failed to load page");
         };
+
+        let output_path = self.build_path.join(&page.url);
 
         self.site_ctx.all_tags.extend(page.frontmatter.tags.clone());
         let pages = {
