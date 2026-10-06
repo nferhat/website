@@ -140,7 +140,7 @@ async fn watch_for_changes(
                         continue;
                     }
                 }
-            } else if is_markdown(&path) {
+            } else if is_djot(&path) {
                 trace!(?path, "Triggering page rebuild due to path change");
 
                 match compiler.recompile_page(&path, true).await {
@@ -189,12 +189,12 @@ fn is_style(p: &Path) -> bool {
     ext == "sass" || ext == "scss"
 }
 
-fn is_markdown(p: &Path) -> bool {
+fn is_djot(p: &Path) -> bool {
     let Some(ext) = p.extension() else {
         return false;
     };
 
-    ext == "md" || ext == "markdown" || ext == "mdown"
+    ext == "dj" || ext == "djot"
 }
 
 fn is_config(p: &Path) -> bool {

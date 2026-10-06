@@ -7,18 +7,17 @@ const fn default_true() -> bool {
 
 /// Frontmatter of a page.
 ///
-/// The frontmatter is some metadata that is specified using markdown at the top
-/// of each page file. It looks something like the following:
+/// The frontmatter is some metadata that is specified at the top of each page file, since djot
+/// itself has no notion of it. It looks something like the following:
 ///
-/// ```md
+/// ```text
 /// +++
 /// title = "Hello world"
 /// tags = ["a", "b"]
 /// +++
 /// ```
 ///
-/// The expected syntax is [TOML](https://toml.io), as per some random markdown extension
-/// supported by the [`markdown`] crate.
+/// The expected syntax is [TOML](https://toml.io), delimited by `+++` lines. See [`split`].
 ///
 /// All pages should have a frontmatter, since it's used to generate the "All Pages" page.
 /// (funny wording, I know)
@@ -46,6 +45,28 @@ pub struct Frontmatter {
     pub metadata: bool,
     /// The template used to rendering this page.
     pub template: Option<String>,
+}
+
+/// Splits the frontmatter off the top of a page.
+///
+/// Returns the raw TOML of the frontmatter, and the remaining contents of the page. Returns [`None`]
+/// if the page doesn't start with a `+++` line, or if the frontmatter is never closed.
+pub fn split(src: &str) -> Option<(&str, &str)> {
+    let rest = src.strip_prefix('\u{feff}').unwrap_or(src);
+    let rest = rest.strip_prefix("+++")?;
+    let rest = rest
+        .strip_prefix("\r\n")
+        .or_else(|| rest.strip_prefix('\n'))?;
+
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        if line.trim_end() == "+++" {
+            return Some((&rest[..offset], &rest[offset + line.len()..]));
+        }
+        offset += line.len();
+    }
+
+    None
 }
 
 pub fn from_str(s: &str) -> Result<Frontmatter, toml::de::Error> {

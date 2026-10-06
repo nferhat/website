@@ -9,10 +9,6 @@ edition.workspace = true
 serde.workspace = true
 toml.workspace = true
 
-# Compiling the markdown -> html
-pulldown-cmark = { version = "0.13.3", features = ["simd"] }
-pulldown-cmark-escape = { version = "0.11.0", features = ["simd"] }
-
 # Highlighting powered by tree-sitter, the only correct highlighting engine.
 tree-sitter-highlight = "0.26.8"
 tree-sitter = "0.26.8"
@@ -48,3 +44,6 @@ blake3 = "1.8.5"
 
 # Font parsing/caching
 allsorts = "0.16.1"
+
+# Compiling the djot -> html
+jotdown = "0.10"

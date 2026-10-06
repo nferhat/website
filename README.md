@@ -1,10 +1,10 @@
 # `website` - An opinionated website builder
 
-This is `website` (yes I know, amazing name). An opinionated SSG. In short, you give it some sort of markdown content, and it will 
+This is `website` (yes I know, amazing name). An opinionated SSG. In short, you give it some [djot](https://djot.net) content, and it will 
 automatically do the following:
 
 - Read out the whole structure of your content
-- Compile the markdown contents into valid HTML
+- Compile the djot contents (`.dj`/`.djot` files) into valid HTML
 - Compile styling using [SASS](https://sass-lang.com)
 - Bundle everything and make it ready for production in a `dist/` folder.
 
@@ -23,7 +23,7 @@ might not like those. Some of which include
 - Lack of extensive configuration
 - Uses tree-sitter for highlighting code blocks
 - Forced use of [SASS](https://sass-lang.org) for styling
-- [GitHub-flavored markdown](gfm) over other markdown standards/formats.
+- [Djot](https://djot.net) over markdown. Each page starts with a `+++` delimited TOML frontmatter.
 - [Liquid](liquid-engine) for templating
 
 ---
@@ -45,7 +45,7 @@ However, I still leave it open source for reference.
 
 ## TODO
 
-- [x] Rendering of markdown files 
+- [x] Rendering of djot files 
 - [x] Proper templating using Shopify's `liquid` engine
   - See `compiler/src/templates/context.rs` for passed-in variables
   - Supports `partials`! You can seamlessly use the `render` directive.
@@ -58,5 +58,4 @@ However, I still leave it open source for reference.
    - `cli serve` supports serving, but it's hot-reloading is kinda iffy, even though it only recompiles
    the page you modified, this might not be it for the long run. This kinda ties in with the previous point
 
-[gfm]: https://github.github.com/gfm/#what-is-github-flavored-markdown-
 [liquid-engine]: https://shopify.dev/docs/api/liquid/

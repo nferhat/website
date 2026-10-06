@@ -1,6 +1,6 @@
 //! # `compiler` - main compiler for pages.
 //!
-//! This crate is responsible for reading markdown files and transforming them into HTML
+//! This crate is responsible for reading djot files and transforming them into HTML
 //! with proper "templating" (more like just adding some styles, performing syntax highlighting,
 //! etc...)
 
@@ -23,9 +23,6 @@ use std::{
 };
 
 use eyre::{Context, bail, eyre};
-use pulldown_cmark::{
-    BrokenLink, BrokenLinkCallback, Event, MetadataBlockKind, Options, Tag, TagEnd,
-};
 use tokio::{fs, io};
 use utils::to_dot_relative;
 
@@ -180,10 +177,7 @@ impl Compiler {
                         continue 'entries;
                     };
 
-                    if matches!(
-                        &*extension.to_string_lossy(),
-                        "md" | "markdown" | "mdown" | "MD"
-                    ) {
+                    if matches!(&*extension.to_string_lossy(), "dj" | "djot") {
                         self.recompile_page(path, reload).await?;
                     }
                 }
@@ -283,28 +277,15 @@ impl Compiler {
         if site_page.is_none() {
             let file_contents = fs::read_to_string(&input_path).await?;
 
-            let options = Options::ENABLE_FOOTNOTES
-                | Options::ENABLE_HEADING_ATTRIBUTES
-                | Options::ENABLE_STRIKETHROUGH
-                | Options::ENABLE_TABLES
-                | Options::ENABLE_TASKLISTS
-                | Options::ENABLE_SMART_PUNCTUATION
-                | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS
-                | Options::ENABLE_OLD_FOOTNOTES
-                | Options::ENABLE_MATH
-                | Options::ENABLE_SUPERSCRIPT
-                | Options::ENABLE_SUBSCRIPT;
-            let mut parser = pulldown_cmark::Parser::new_with_broken_link_callback(
-                &file_contents,
-                options,
-                Some(|broken_link: BrokenLink| {
-                    warn!(?broken_link, "Found broken link");
-                    None
-                }),
-            );
+            // Djot has no notion of frontmatter, so we split it off ourselves before parsing.
+            let (frontmatter_src, body_src) =
+                frontmatter::split(&file_contents).ok_or_else(|| {
+                    eyre!("missing frontmatter (expected a `+++` delimited TOML block at the top)")
+                })?;
+            let frontmatter =
+                frontmatter::from_str(frontmatter_src).context("failed to parse frontmatter")?;
 
-            // First extract the frontmatter from the parser
-            let frontmatter = get_frontmatter(&mut parser)?;
+            let parser = jotdown::Parser::new(body_src);
 
             let body = {
                 let mut out = String::with_capacity(1024);
@@ -331,29 +312,11 @@ impl Compiler {
 
             // Meta information.
             const WPM: f64 = 175.0;
-            let word_count = {
-                // Skip frontmatter by finding content after second +++
-                let content = if let Some(first_delim) = file_contents.find("+++") {
-                    if let Some(second_delim_offset) = file_contents[first_delim + 3..].find("+++")
-                    {
-                        let second_delim = first_delim + 3 + second_delim_offset;
-                        &file_contents[second_delim + 3..]
-                    } else {
-                        &file_contents
-                    }
-                } else {
-                    &file_contents
-                };
-
-                // Count words, filtering out pure-syntax tokens
-                content
-                    .split_whitespace()
-                    .filter(|word| {
-                        // Skip if word is all markdown syntax characters
-                        !word.chars().all(|c| "#+*_`[]()!-=|>".contains(c))
-                    })
-                    .count()
-            };
+            let word_count = body_src
+                .split_whitespace()
+                // Skip pure-syntax tokens (all djot syntax characters)
+                .filter(|word| !word.chars().all(|c| "#+*_`[]{}()!-=|>:^~".contains(c)))
+                .count();
             let reading_time = ((word_count as f64 / WPM) * 60.0).round() as usize;
 
             // Remove the previous one. the {{pages}} variable should have all pages but the current one.
@@ -553,40 +516,4 @@ impl<'ctx> Into<context::Page<'ctx>> for &'ctx SitePage {
             meta: self.meta,
         }
     }
-}
-
-fn get_frontmatter<'src, F: BrokenLinkCallback<'src>>(
-    parser: &mut pulldown_cmark::Parser<'src, F>,
-) -> eyre::Result<frontmatter::Frontmatter> {
-    let first_event = parser.next().ok_or_else(|| eyre!("missing frontmatter"))?;
-
-    let Event::Start(Tag::MetadataBlock(MetadataBlockKind::PlusesStyle)) = first_event else {
-        bail!("invalid frontmatter node")
-    };
-
-    // Collect all text content until we hit the End tag
-    let mut frontmatter_content = String::new();
-
-    loop {
-        // FIXME: We can potentially get stuck in this loop? The parser should not give us a begin block without
-        // an end block anyway.
-        let Some(event) = parser.next() else {
-            break;
-        };
-
-        match event {
-            // No more frontmatter
-            Event::End(TagEnd::MetadataBlock(MetadataBlockKind::PlusesStyle)) => break,
-            // Otherwise keep accumulating the text in the string
-            Event::Text(text) => frontmatter_content.push_str(&text),
-            Event::SoftBreak | Event::HardBreak => {
-                frontmatter_content.push('\n');
-            }
-            _ => unreachable!("inside frontmatter"),
-        }
-    }
-
-    let frontmatter =
-        frontmatter::from_str(&frontmatter_content).context("failed to parse frontmatter")?;
-    Ok(frontmatter)
 }
