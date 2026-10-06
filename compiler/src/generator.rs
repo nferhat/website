@@ -13,9 +13,7 @@
 use std::fmt::{self, Write};
 use std::path::Path;
 
-use jotdown::{
-    AttributeKind, Attributes, Container, Event, LinkType, Render, SpanLinkType, html::Renderer,
-};
+use jotdown::{AttributeKind, Attributes, Container, Event, Render, html::Renderer};
 
 use crate::assets::AssetRegistry;
 use crate::highlighter::{self, GrammarCache};
@@ -212,18 +210,26 @@ where
     out
 }
 
+/// Information about a page, gathered while rendering it.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RenderInfo {
+    /// Whether the page contains any (inline or display) math.
+    pub has_math: bool,
+}
+
 pub async fn write_html_fmt<'a, I, W>(
     mut writer: W,
     mut iter: I,
     source_path: &Path,
     grammar_cache: &GrammarCache,
     asset_registry: &AssetRegistry,
-) -> fmt::Result
+) -> Result<RenderInfo, fmt::Error>
 where
     I: Iterator<Item = Event<'a>>,
     W: Write,
 {
     let mut renderer = Renderer::default();
+    let mut info = RenderInfo::default();
 
     while let Some(event) = iter.next() {
         match event {
@@ -244,9 +250,15 @@ where
                 attrs.push((AttributeKind::Class, "inline-code".into()));
                 renderer.push_event(Event::Start(Container::Verbatim, attrs), &mut writer)?;
             }
-            event => renderer.push_event(event, &mut writer)?;
+            event => {
+                if let Event::Start(Container::Math { .. }, _) = &event {
+                    // the tempaltes should include a MathML script if page.meta.has_math is true.
+                    info.has_math = true;
+                }
+                renderer.push_event(event, &mut writer)?;
+            }
         }
     }
 
-    Ok(())
+    Ok(info)
 }

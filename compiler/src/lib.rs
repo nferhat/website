@@ -27,7 +27,7 @@ use tokio::{fs, io};
 use utils::to_dot_relative;
 
 pub use config::{Config, Error as ConfigError, StylingConfig};
-pub use generator::write_html_fmt;
+pub use generator::{RenderInfo, write_html_fmt};
 pub use style::compile_to_stylesheet;
 
 use assets::AssetRegistry;
@@ -287,9 +287,9 @@ impl Compiler {
 
             let parser = jotdown::Parser::new(body_src);
 
-            let body = {
+            let (body, render_info) = {
                 let mut out = String::with_capacity(1024);
-                write_html_fmt(
+                let info = write_html_fmt(
                     &mut out,
                     parser,
                     &input_path,
@@ -297,7 +297,7 @@ impl Compiler {
                     &self.asset_registry,
                 )
                 .await?;
-                out
+                (out, info)
             };
 
             // We can calculate the resulting URL from the output path.
@@ -333,6 +333,7 @@ impl Compiler {
                 meta: context::PageMeta {
                     reading_time,
                     word_count,
+                    has_math: render_info.has_math,
                 },
             });
         }

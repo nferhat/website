@@ -77,6 +77,9 @@ pub struct PageMeta {
     pub word_count: usize,
     /// The time in seconds to read this page.
     pub reading_time: usize,
+    /// Whether this page contains any math. Math is rendered as `\(..\)` (inline) and `\[..\]`
+    /// (display), so use this to only load a math typesetting script on pages that need it.
+    pub has_math: bool,
 }
 
 #[derive(Serialize)]
