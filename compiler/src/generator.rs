@@ -5,7 +5,7 @@
 //!
 //! - Code blocks, which get highlighted with tree-sitter and wrapped in a `codeblock` container.
 //! - Images, which get loaded through the asset registry and wrapped in an `image-container`.
-//! - Inline code, which gets an `inline-code` class.
+//! - Inline code, which gets an `inline-code` class
 //!
 //! Intercepted blocks are handed back to the renderer as raw HTML events, so it can keep track of
 //! everything else (footnotes, list tightness, indentation, ...) on its own.
@@ -33,32 +33,81 @@ fn escape_html(out: &mut String, s: &str) {
     }
 }
 
-/// Feeds a chunk of raw HTML to the renderer, as a raw block.
-fn push_raw_block<'a, W: Write>(
-    renderer: &mut Renderer<'a>,
+/// Feeds a chunk of raw HTML to the renderer, as a raw block or as raw inline content.
+fn push_raw<W: Write>(
+    renderer: &mut Renderer<'_>,
+    block: bool,
     html: String,
     out: &mut W,
 ) -> fmt::Result {
-    let container = Container::RawBlock {
-        format: "html".into(),
+    let format = "html".into();
+    let container = if block {
+        Container::RawBlock { format }
+    } else {
+        Container::RawInline { format }
     };
-    renderer.push_event(Event::Start(container.clone(), Attributes::new()), &mut *out)?;
+    renderer.push_event(
+        Event::Start(container.clone(), Attributes::new()),
+        &mut *out,
+    )?;
     renderer.push_event(Event::Str(html.into()), &mut *out)?;
-    renderer.push_event(Event::End(container.clone()), &mut *out)
+    renderer.push_event(Event::End(container), &mut *out)
 }
 
-/// Feeds a chunk of raw HTML to the renderer, as raw inline content.
-fn push_raw_inline<'a, W: Write>(
-    renderer: &mut Renderer<'a>,
-    html: String,
-    out: &mut W,
-) -> fmt::Result {
-    let container = || Container::RawInline {
-        format: "html".into(),
-    };
-    renderer.push_event(Event::Start(container(), Attributes::new()), &mut *out)?;
-    renderer.push_event(Event::Str(html.into()), &mut *out)?;
-    renderer.push_event(Event::End(container()), &mut *out)
+/// Highlights `code` with the tree-sitter grammar for `language`.
+///
+/// Returns [`None`] if the language is unknown (or empty), or if highlighting fails.
+async fn highlight_code(
+    code: &str,
+    language: &str,
+    grammar_cache: &GrammarCache,
+) -> Option<String> {
+    if language.is_empty() {
+        return None;
+    }
+
+    let grammar = grammar_cache
+        .load(language)
+        .await
+        .inspect_err(|err| warn!(%language, ?err, "failed to load grammar"))
+        .ok()?;
+    highlighter::highlight(code, grammar, grammar_cache)
+        .inspect_err(|err| warn!(%language, ?err, "failed to highlight code"))
+        .ok()
+}
+
+/// Renders inline code in a given language, consuming events up to (and including) the end of
+/// the raw inline.
+///
+/// Djot has no syntax for specifying the language of inline code, so we (ab)use raw inlines:
+/// `` `fn main() {}`{=rust} `` is rendered as highlighted Rust code.
+async fn render_inline_code<'a, I>(
+    iter: &mut I,
+    language: &str,
+    grammar_cache: &GrammarCache,
+) -> String
+where
+    I: Iterator<Item = Event<'a>>,
+{
+    let mut code = String::new();
+    for event in iter {
+        match event {
+            Event::Str(text) => code.push_str(&text),
+            Event::End(Container::RawInline { .. }) => break,
+            _ => (),
+        }
+    }
+
+    let mut out = String::with_capacity(code.len() * 2);
+    out.push_str("<code class=\"inline-code language-");
+    escape_html(&mut out, language);
+    out.push_str("\">");
+    match highlight_code(&code, language, grammar_cache).await {
+        Some(rendered) => out.push_str(&rendered),
+        None => escape_html(&mut out, &code),
+    }
+    out.push_str("</code>");
+    out
 }
 
 /// Renders a code block, consuming events up to (and including) the end of the code block.
@@ -91,18 +140,7 @@ where
         out.push_str("\">");
     }
 
-    // In order to do tree-sitter highlighting, we first have to load the language.
-    let mut highlighted = None;
-    if !language.is_empty() {
-        if let Ok(grammar) = grammar_cache.load(language).await {
-            match highlighter::highlight(&code, grammar, grammar_cache) {
-                Ok(rendered) => highlighted = Some(rendered),
-                Err(err) => warn!(?err, "failed to highlight codeblock"),
-            }
-        }
-    }
-
-    match highlighted {
+    match highlight_code(&code, language, grammar_cache).await {
         Some(rendered) => out.push_str(&rendered),
         None => escape_html(&mut out, &code),
     }
@@ -191,28 +229,22 @@ where
         match event {
             Event::Start(Container::CodeBlock { language }, _) => {
                 let html = render_code_block(&mut iter, &language, grammar_cache).await;
-                push_raw_block(&mut renderer, html, &mut writer)?;
+                push_raw(&mut renderer, true, html, &mut writer)?;
             }
             Event::Start(Container::Image(src, _), attrs) => {
-                let html =
-                    render_image(&mut iter, &src, &attrs, source_path, asset_registry).await;
-                push_raw_inline(&mut renderer, html, &mut writer)?;
+                let html = render_image(&mut iter, &src, &attrs, source_path, asset_registry).await;
+                push_raw(&mut renderer, false, html, &mut writer)?;
+            }
+            // allows be to write inline code examples easily.
+            Event::Start(Container::RawInline { format }, _) if format != "html" && format != "latex" => {
+                let html = render_inline_code(&mut iter, &format, grammar_cache).await;
+                push_raw(&mut renderer, false, html, &mut writer)?;
             }
             Event::Start(Container::Verbatim, mut attrs) => {
                 attrs.push((AttributeKind::Class, "inline-code".into()));
                 renderer.push_event(Event::Start(Container::Verbatim, attrs), &mut writer)?;
             }
-            Event::Start(Container::Link(label, LinkType::Span(SpanLinkType::Unresolved)), attrs) => {
-                warn!(%label, "Found broken link");
-                renderer.push_event(
-                    Event::Start(
-                        Container::Link(label, LinkType::Span(SpanLinkType::Unresolved)),
-                        attrs,
-                    ),
-                    &mut writer,
-                )?;
-            }
-            event => renderer.push_event(event, &mut writer)?,
+            event => renderer.push_event(event, &mut writer)?;
         }
     }
 
