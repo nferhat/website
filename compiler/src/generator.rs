@@ -6,6 +6,7 @@
 //! - Code blocks, which get highlighted with tree-sitter and wrapped in a `codeblock` container.
 //! - Images, which get loaded through the asset registry and wrapped in an `image-container`.
 //! - Inline code, which gets an `inline-code` class
+//! - `codeblock` divs, which get wrapped in `<pre><code>` (see [`render_codeblock_div`])
 //! - `details` divs, which become collapsible `<details>` elements (see [`details_open`])
 //!
 //! Intercepted blocks are handed back to the renderer as raw HTML events, so it can keep track of
@@ -102,7 +103,9 @@ where
     escape_html(&mut out, language);
     out.push_str("\">");
     match highlight_code(&code, language, grammar_cache).await {
-        Some(rendered) => out.push_str(&rendered),
+        // The highlighter always terminates its output with a newline, which would show up as a
+        // trailing space (and extra padding) inside of the inline code.
+        Some(rendered) => out.push_str(rendered.trim_end_matches('\n')),
         None => escape_html(&mut out, &code),
     }
     out.push_str("</code>");
@@ -208,6 +211,47 @@ where
         out.push_str("</span>");
     }
     out.push_str("</div>");
+    out
+}
+
+/// The class of the djot div that gets rendered as a hand-written code block.
+const CODEBLOCK_CLASS: &str = "codeblock";
+
+/// Renders a `codeblock` div, consuming events up to (and including) the end of the div.
+///
+/// Line breaks are kept as they are, paragraphs are separated by a blank line.
+fn render_codeblock_div<'a, I>(iter: &mut I) -> String
+where
+    I: Iterator<Item = Event<'a>>,
+{
+    let mut out = String::from("<div class=codeblock><pre><code>");
+    let mut renderer = Renderer::default();
+    let mut paragraphs = 0;
+    let mut nest = 0;
+
+    for event in iter {
+        match event {
+            Event::Start(Container::Div { .. }, _) => nest += 1,
+            Event::End(Container::Div { .. }) if nest == 0 => break,
+            Event::End(Container::Div { .. }) => nest -= 1,
+            Event::Start(Container::Paragraph, _) => {
+                if paragraphs > 0 {
+                    out.push_str("\n\n");
+                }
+                paragraphs += 1;
+            }
+            Event::End(Container::Paragraph) => (),
+            // `<br>` makes no sense inside of `<pre>`.
+            Event::Hardbreak => {
+                let _ = renderer.push_event(Event::Softbreak, &mut out);
+            }
+            event => {
+                let _ = renderer.push_event(event, &mut out);
+            }
+        }
+    }
+
+    out.push_str("\n</code></pre></div>\n");
     out
 }
 
@@ -323,6 +367,11 @@ where
             Event::Start(Container::RawInline { format }, _) if format != "html" && format != "latex" => {
                 let html = render_inline_code(&mut iter, &format, grammar_cache).await;
                 push_raw(&mut renderer, false, html, &mut writer)?;
+            }
+            // hand-written (colored) code blocks, wrapped like the highlighted ones.
+            Event::Start(Container::Div { class }, _) if class == CODEBLOCK_CLASS => {
+                let html = render_codeblock_div(&mut iter);
+                push_raw(&mut renderer, true, html, &mut writer)?;
             }
             // collapsible sections: `{summary="Title"}` on top of a `::: details` div.
             Event::Start(Container::Div { class }, attrs) if class == DETAILS_CLASS => {
