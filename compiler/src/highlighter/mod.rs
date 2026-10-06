@@ -90,6 +90,7 @@ impl GrammarCache {
             .await
             .context("failed to load highlight configuration")?;
         config.configure(&self.theme.highlight_names);
+        disable_unthemed_captures(&mut config, &self.theme.highlight_names);
 
         let mut cache = self.cache.lock().await;
         cache.insert(name.to_string(), Arc::new(config));
@@ -263,4 +264,42 @@ pub fn highlight(
 
     let highlighted_lines = renderer.lines().collect::<Vec<_>>();
     Ok(highlighted_lines.join(""))
+}
+
+
+/// Whether `capture` gets a style out of the given `highlight_names`.
+///
+/// This mirrors [`HighlightConfiguration::configure`]: a theme name applies to a capture if all
+/// of its dot-separated parts appear in the capture name, so `@one.two` falls back to `one`.
+fn capture_is_themed(capture: &str, highlight_names: &[String]) -> bool {
+    highlight_names
+        .iter()
+        .any(|name| name.split('.').all(|part| capture.split('.').any(|p| p == part)))
+}
+
+/// Disables the captures of a grammar's query that do not resolve to any theme entry.
+///
+/// Queries imported from editors carry captures that only matter there, like neovim's `@spell`.
+/// When multiple captures apply to the same node, tree-sitter-highlight keeps the *last* one, so
+/// `(comment) @comment @spell` resolves to `@spell`, which has no style, and the node ends up not
+/// highlighted at all. Disabling such captures lets the earlier, themed one apply instead.
+// FIXME: Maybe make tree-sitter-highlight combine or something? I dunno
+fn disable_unthemed_captures(config: &mut HighlightConfiguration, highlight_names: &[String]) {
+    let unthemed = config
+        .query
+        .capture_names()
+        .iter()
+        .filter(|name| {
+            !(name.starts_with('_')
+                || name.starts_with("injection.")
+                || name.starts_with("local.")
+                || **name == "none"
+                || capture_is_themed(name, highlight_names))
+        })
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+
+    for name in unthemed {
+        config.query.disable_capture(&name);
+    }
 }
