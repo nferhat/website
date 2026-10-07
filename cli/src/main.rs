@@ -32,6 +32,8 @@ pub enum Command {
     Serve {
         #[arg(long)]
         port: Option<u16>,
+        #[arg(long)]
+        host: bool,
     },
     /// Builds all tree-sitter grammars.
     BuildGrammars {
@@ -61,7 +63,7 @@ fn main() -> eyre::Result<()> {
     let build_dir = root.join("dist");
     _ = std::fs::remove_dir_all(&build_dir);
     if let Err(err) = std::fs::create_dir_all(&build_dir) {
-        eyre::bail!("Failed to create output directory: {err:?}")
+        eyre::bail!("Failed to create output directory: {err:?}");
     }
 
     let config = compiler::Config::load(root.join("website.toml"))?;
@@ -80,11 +82,11 @@ fn main() -> eyre::Result<()> {
                 build::compile(compiler).await?;
                 Ok(())
             }
-            Command::Serve { port } => {
+            Command::Serve { port, host } => {
                 let port = port.unwrap_or(7272);
                 let mut config = config;
                 config.base_url = format!("http://localhost:{port}");
-                server::run(root, config, port).await
+                server::run(root, config, host, port).await
             }
             Command::BuildGrammars { jobs } => {
                 let languages_dir = root.join("languages");

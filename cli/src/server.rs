@@ -23,7 +23,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
-pub async fn run(root: PathBuf, config: Config, port: u16) -> eyre::Result<()> {
+pub async fn run(root: PathBuf, config: Config, host: bool, port: u16) -> eyre::Result<()> {
     let mut compiler = Compiler::new(root.clone().into_boxed_path(), config)
         .await
         .context("failed to init compiler")?;
@@ -40,7 +40,7 @@ pub async fn run(root: PathBuf, config: Config, port: u16) -> eyre::Result<()> {
     let (reload_sender, _) = broadcast::channel::<()>(32);
     let build_dir = root.join("dist");
     _ = tokio::join!(
-        serve(reload_sender.clone(), &build_dir, &static_assets_path, port),
+        serve(reload_sender.clone(), &build_dir, &static_assets_path, host, port),
         watch_for_changes(&root, compiler, reload_sender.clone())
     );
 
@@ -209,6 +209,7 @@ async fn serve(
     tx: broadcast::Sender<()>,
     build_path: &Path,
     static_assets_path: &Path,
+    host: bool,
     port: u16,
 ) -> eyre::Result<()> {
     info!(?build_path, ?static_assets_path);
@@ -226,7 +227,7 @@ async fn serve(
         .fallback_service(ServeDir::new(&build_path))
         .with_state(tx);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from((if host { [0; 4] } else { [127, 0, 0, 1] }, port));
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     info!("dev server started on {}", listener.local_addr().unwrap());
     axum::serve(listener, app.layer(TraceLayer::new_for_http())).await?;
