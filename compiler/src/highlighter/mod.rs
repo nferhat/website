@@ -66,6 +66,11 @@ impl GrammarCache {
             }
         }
 
+        // The name can come from highlighted source (injections), keep it inside the languages dir
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            bail!("invalid grammar name: {name:?}");
+        }
+
         // Check if the compiled grammar exists in the build directory
         let build_dir = self.languages_dir.join("_build");
         let so_path = build_dir.join(format!("{}.so", name));
@@ -237,33 +242,47 @@ impl GrammarCache {
 /// Highlights the given `source_code` with the specified `grammar`.
 ///
 /// To get the actual grammars, refer to [`GrammarCache::load`]
-pub fn highlight(
+pub async fn highlight(
     source_code: &str,
     grammar: Arc<HighlightConfiguration>,
     grammar_cache: &GrammarCache,
 ) -> Result<String> {
-    let mut highlighter = Highlighter::new();
-    let events = highlighter.highlight(&grammar, source_code.as_bytes(), None, |_name| {
-        // FIXME: Injections
-        None
-    })?;
-    let mut renderer = HtmlRenderer::new();
     let theme = &grammar_cache.theme;
+    // The injection callback is sync but loading grammars is async: render, load whatever the
+    // callback asked for, and render again until nothing is missing. Failed loads are stored as
+    // `None` so they are not asked for again (and that language is left unhighlighted).
+    let mut injected: HashMap<String, Option<Arc<HighlightConfiguration>>> = HashMap::new();
+    loop {
+        let mut missing = Vec::new();
+        let mut highlighter = Highlighter::new();
+        let events = highlighter.highlight(&grammar, source_code.as_bytes(), None, |name| {
+            let config = injected.get(name);
+            if config.is_none() {
+                missing.push(name.to_string());
+            }
+            config.and_then(|config| config.as_deref())
+        })?;
+        let mut renderer = HtmlRenderer::new();
+        renderer.render(
+            events,
+            source_code.as_bytes(),
+            &move |tree_sitter_highlight::Highlight(id), output| {
+                output.extend(b"class='");
+                let highlight_name = &theme.highlight_names[id];
+                let css_highlight_name = highlight_name.replace('.', "-");
+                output.extend_from_slice(css_highlight_name.as_bytes());
+                output.extend(b"'");
+            },
+        )?;
 
-    renderer.render(
-        events,
-        source_code.as_bytes(),
-        &move |tree_sitter_highlight::Highlight(id), output| {
-            output.extend(b"class='");
-            let highlight_name = &theme.highlight_names[id];
-            let css_highlight_name = highlight_name.replace('.', "-");
-            output.extend_from_slice(css_highlight_name.as_bytes());
-            output.extend(b"'");
-        },
-    )?;
-
-    let highlighted_lines = renderer.lines().collect::<Vec<_>>();
-    Ok(highlighted_lines.join(""))
+        if missing.is_empty() {
+            return Ok(renderer.lines().collect::<Vec<_>>().join(""));
+        }
+        for name in missing {
+            let config = grammar_cache.load(&name).await.ok();
+            injected.insert(name, config);
+        }
+    }
 }
 
 

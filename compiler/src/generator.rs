@@ -72,6 +72,7 @@ async fn highlight_code(
         .inspect_err(|err| warn!(%language, ?err, "failed to load grammar"))
         .ok()?;
     highlighter::highlight(code, grammar, grammar_cache)
+        .await
         .inspect_err(|err| warn!(%language, ?err, "failed to highlight code"))
         .ok()
 }

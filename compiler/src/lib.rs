@@ -280,8 +280,27 @@ impl Compiler {
                 frontmatter::split(&file_contents).ok_or_else(|| {
                     eyre!("missing frontmatter (expected a `+++` delimited TOML block at the top)")
                 })?;
-            let frontmatter =
-                frontmatter::from_str(frontmatter_src).context("failed to parse frontmatter")?;
+            let frontmatter = {
+                // I would also like to use the djot features in the title, so also parse that
+                let mut frontmatter = frontmatter::from_str(frontmatter_src)
+                    .context("failed to parse frontmatter")?;
+
+                // FIXME: Allocs
+                let parser = jotdown::Parser::new(&frontmatter.title);
+                let mut title = String::new();
+                write_html_fmt(
+                    &mut title,
+                    parser,
+                    Path::new(""),
+                    &self.grammar_cache,
+                    &self.asset_registry,
+                )
+                .await
+                .context("failed to compile title")?;
+
+                frontmatter.title = title.trim().to_string();
+                frontmatter
+            };
 
             let parser = jotdown::Parser::new(body_src);
 
